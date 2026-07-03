@@ -1,0 +1,27 @@
+# NOTE: torch must be installed separately with the correct CUDA wheel.
+# GPU (A100, CUDA 12.1): pip install torch==2.11.0+cu121 --index-url https://download.pytorch.org/whl/cu121
+# CPU-only dev:          pip install torch==2.11.0
+# Do NOT rely on the bare torch==2.11.0 line below for GPU systems.
+
+fastapi
+uvicorn
+# For GPU (A100/CUDA 12.1) — install manually:
+# pip install torch==2.11.0+cu121 --index-url https://download.pytorch.org/whl/cu121
+# For CPU-only (local dev/smoke test):
+# pip install torch==2.11.0
+# torch==2.11.0
+# CRITICAL: For GPU (A100/CUDA 12.1), you MUST install torch manually with the CUDA wheel:
+# pip install torch==2.11.0+cu121 --index-url https://download.pytorch.org/whl/cu121
+# To use the verified GPU day environment, use: pip install -r requirements_lock_gpu_day.txt
+# Only use the bare 'pip install torch' for CPU-only local development.
+pydantic
+transformers
+tokenizers
+requests
+numpy
+pandas
+ipykernel
+wrapt
+datasets
+safetensors
+ninja

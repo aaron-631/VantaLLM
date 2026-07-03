@@ -1,0 +1,12 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite it as below."
+authors:
+- family-names: "Chakraborty"
+  given-names: "Aaron"
+  email: "aaronchakraborty631@gmail.com"
+title: "VantaLLM: A modular framework for training decoder-only transformer language models"
+version: 1.0.0
+date-released: 2026-07-03
+url: "https://github.com/aaronchakraborty/VantaLLM"
+repository-code: "https://github.com/aaronchakraborty/VantaLLM"
+license: Apache-2.0

@@ -1,0 +1,10 @@
+What is CVE-2021-44228 and how does it work?
+Explain a SQL injection attack and how to prevent it.
+What is the difference between XSS and CSRF?
+How does a buffer overflow vulnerability get exploited?
+Describe the MITRE ATT&CK framework.
+What is privilege escalation and what are common techniques?
+How does SSL/TLS certificate validation work?
+What is a zero-day vulnerability?
+Explain how ransomware typically operates.
+What tools are used for network port scanning?

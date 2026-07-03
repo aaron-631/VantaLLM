@@ -1,0 +1,23 @@
+{
+  "vocab_size": 151003,
+  "min_frequency": 2,
+  "dataset": [
+    {
+      "name": "vanta-llm/corpus",
+      "revision": "fd7967ddda760281a2f01f4367f7b78bd128f3ec"
+    },
+    {
+      "name": "AlicanKiraz0/All-CVE-Records-Training-Dataset",
+      "revision": "c2704709be647eabd75305416994278f9a8ec3fc"
+    }
+  ],
+  "type": "ByteLevelBPE",
+  "description": "Custom cybersecurity BPE tokenizer for 235B LLM",
+  "special_tokens": {
+    "pad_token": "<pad>",
+    "eos_token": "<eos>",
+    "bos_token": "<bos>",
+    "unk_token": "<unk>",
+    "mask_token": "<mask>"
+  }
+}

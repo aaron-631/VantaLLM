@@ -1,0 +1,28 @@
+# Checkpoints and Models
+checkpoints/
+*.pt
+*.bin
+*.ckpt
+*.safetensors
+*.pth
+
+# Logs and Outputs
+logs/
+outputs/
+wandb/
+mlruns/
+tensorboard/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+.env
+
+# IDE and OS
+.DS_Store
+.vscode/
+.idea/
+
+# Codex/Custom
+.codex/

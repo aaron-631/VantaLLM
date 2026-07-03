@@ -1,0 +1,18 @@
+{
+  "vocab_size": 151003,
+  "d_model": 1024,
+  "num_layers": 12,
+  "num_q_heads": 16,
+  "num_kv_heads": 4,
+  "head_dim": 64,
+  "max_seq_len": 2048,
+  "num_experts": 16,
+  "top_k_experts": 2,
+  "d_ff_dense": 4096,
+  "d_ff_moe": 1024,
+  "moe_every_n": 2,
+  "quantization": "bf16",
+  "composite_persona_dim": 256,
+  "moe_aux_loss_coeff": 0.3,
+  "gradient_checkpointing": true
+}
