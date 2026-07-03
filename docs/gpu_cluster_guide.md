@@ -14,7 +14,10 @@ set +a
 
 export QUANT_MODE=bf16
 export MASTER_ADDR=${MASTER_ADDR:-127.0.0.1}
-export MASTER_PORT=${MASTER_PORT:-29500}
+# Leave MASTER_PORT unset for single-node runs: launch_ddp.sh probes a free
+# ephemeral port to avoid stale-socket "address already in use" collisions.
+# Export it explicitly only for multi-node rendezvous, where every rank must
+# agree on the same port.
 export NCCL_DEBUG=${NCCL_DEBUG:-INFO}
 export PYTHONUNBUFFERED=1
 ```
@@ -86,7 +89,7 @@ CPU) only for the larger analytical configs, by passing it explicitly:
 bash vantallm/distributed/launch_deepspeed.sh 8 vantallm/distributed/deepspeed_configs/zero3.json
 ```
 
-Rule of thumb from the reference memory profiling: ≲4B parameters → ZeRO-2;
+Rule of thumb from analytic memory sizing: ≲4B parameters → ZeRO-2;
 ≳30B parameters → ZeRO-3 with CPU offload.
 
 ## NCCL Configuration
@@ -102,18 +105,22 @@ When running on distributed clusters, ensure NCCL is configured correctly to pre
 - **Immediate trainer exit:** `TRAIN_STEPS` is mandatory. The training script intentionally refuses to infer a default target step count.
 
 ## DeepSpeed ZeRO-3 Initialisation (CPU Offload)
-When utilizing ZeRO-3 with CPU offloading for large models (e.g., 125B parameter profiles):
-- **Initialization Silence:** `deepspeed.initialize()` must instantiate the full model on the CPU, partition it, allocate offloaded optimizer states, and move initial parameter shards to the GPUs. This CPU-bound phase can take **30 to 90 minutes of complete silence**.
+The larger analytical configs (e.g., the 125B parameter profile) are not part
+of the validated 567M reference path; they are structurally supported by the
+same code and JSON config system, but running one is a separate provisioning
+exercise. When planning a ZeRO-3 CPU-offload run at that scale, expect the
+following requirements:
+- **Initialization Silence:** `deepspeed.initialize()` must instantiate the full model on the CPU, partition it, allocate offloaded optimizer states, and move initial parameter shards to the GPUs. For a 100B-scale profile this CPU-bound phase can run for tens of minutes with no console output; plan for a long silent window rather than treating it as a hang.
 - **Use Multiplexers:** You MUST use a terminal multiplexer (`tmux` or `screen`). If you run the command directly over SSH, the session will time out during the silent graph construction, killing the process (`SIGHUP`).
 - **Dependencies:** Ensure `python3-devel`, `gcc-c++`, `make`, `git`, and `libaio-devel` are installed on your Linux system. They are strictly required for compiling C++ DeepSpeed extensions and for asynchronous I/O during ZeRO CPU offloading.
 - **LR Scheduler Compatibility:** PyTorch LR schedulers fail the `isinstance` check against `DeepSpeedZeroOptimizer_Stage3`. The training script automatically extracts the base optimizer (`optimizer.optimizer`) to prevent crashes.
-- **125B Swapfile Requirements:** The 125B model combined with an 8-bit partitioned optimizer requires exactly 1,500 GB of virtual memory. For single-node runs on a standard 692GB node, an **850GB+ NVMe swapfile is absolutely mandatory** to prevent OOM kills during paging.
-- **Optimizer Selection:** For the 125B run, you must use `bitsandbytes.optim.PagedAdamW8bit` to fit within memory constraints.
+- **Swap / Virtual Memory:** A 100B-scale model plus an 8-bit partitioned optimizer needs on the order of a terabyte-plus of virtual memory. On a single node whose host RAM is smaller than that, a large NVMe swapfile (budget several hundred GB and size it against your own node's RAM) is required to avoid OOM kills during paging. Size it from the target node's actual memory rather than assuming a fixed figure.
+- **Optimizer Selection:** At this scale use `bitsandbytes.optim.PagedAdamW8bit` to keep the optimizer state within memory constraints.
 
 ## A100 20GB Configuration Notes
 The 567M model reference configuration (`vanta_567m.json`) is designed to easily fit within a 20GB VRAM footprint using the default micro-batch size and gradient accumulation settings. 
 
-The validation and scaling advice provided in this guide applies equally to 20GB, 40GB, and 80GB A100 environments. For 20GB-class A100 setups, the validated reference path uses standard BF16 mixed precision and DeepSpeed ZeRO-1 without requiring branch-specific code changes.
+The validation and scaling advice provided in this guide applies equally to 20GB, 40GB, and 80GB A100 environments. For 20GB-class A100 setups, the validated reference path uses standard BF16 mixed precision with either single-GPU DDP or DeepSpeed ZeRO-2 (the `launch_deepspeed.sh` default), without requiring branch-specific code changes.
 
 ### Hardware Tuning Knobs
 
@@ -158,14 +165,17 @@ Important implementation note: the current public repo exposes `bf16` and `fp16`
 
 ### Known Blackwell Bring-Up Observations
 
-During earlier large-model bring-up work, kernel messages such as `kbifInitLtr_GB202: LTR is disabled` were treated as benign Blackwell driver quirks when they appeared without companion signs of actual failure such as:
+On Blackwell-class nodes, some kernel/driver log lines (for example LTR-related
+messages such as `LTR is disabled`) can appear during bring-up as benign driver
+quirks. Do not treat a lone message like that as proof of failure. Weigh it only
+against companion signs of an actual problem:
 
 - OOM-killer entries in `dmesg`
 - NCCL initialisation failures
 - rank exits during launcher startup
 - monotonic host-memory growth ending in process death
 
-Treat those messages as a signal to keep observing the run, not as standalone proof that the launch failed.
+If none of those are present, treat such a message as a signal to keep observing the run, not as standalone proof that the launch failed.
 
 ### Blackwell Operator Policy
 

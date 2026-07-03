@@ -27,6 +27,9 @@ __pycache__/
 # Codex/Custom
 .codex/
 
+# Internal audit-reconciliation scratch (never publish)
+VERIFIED_FINDINGS.md
+
 # Packaging & Data
 dist/
 build/

@@ -215,7 +215,7 @@ $ python -c "import json; from vantallm.model.transformer import VantaTransforme
 
 | Suite | Result |
 |---|---|
-| `pytest tests/` (smoke) | 8/8 ✅ |
+| `pytest tests/` (8 smoke + 3 suite wrappers) | 11/11 ✅ |
 | `tests/test_task3.py` (structural) | 4/4 ✅ |
 | `tests/test_system.py --phase 1` (unit) | 41/41 ✅ |
 | `tests/test_system.py --phase 2` (integration) | 20/20 ✅ |
@@ -291,7 +291,7 @@ These personas are not separate models; they are routing and conditioning modes 
 - `./run_pipeline.sh` is the supported operator entrypoint for dataset processing.
 - Do not manually edit `data_pipeline/pipeline_manifest.json` or `data_pipeline/global_hash_log.json`.
 - Do not rename shard files by hand.
-- The 567M config is the validated public reference path for A100 20GB-class bring-up.
+- The 567M config is the validated public reference path for A100 20GB-class hardware, exercised with a completed 30,000-step training run on a 20GB A100.
 - Hardware scaling is driven by a small set of knobs: `MODEL_CONFIG`, `BATCH_SIZE`, `GRAD_ACCUM_STEPS`, `QUANT_MODE`, and the DeepSpeed JSON configs.
 - On larger GPUs, start from the validated 567M contract and raise per-GPU batch or reduce accumulation only after the baseline path is stable.
 - Change one major variable at a time when debugging distributed runs. Topology, ZeRO stage, batch size, and model config should not all move in the same iteration.

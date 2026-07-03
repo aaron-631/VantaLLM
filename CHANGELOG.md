@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **`pytest tests/` now reports real coverage (11 tests, was 8).** Added
+  `tests/test_suites_pytest.py`, which wraps the CPU-safe, checkpoint-free script
+  suites (`test_task3.py`, `test_system.py` phases 1–2) as subprocess-driven
+  pytest cases. Previously only `test_smoke.py` was pytest-native, so a reviewer
+  running `pytest` saw 8 tests while the substantive 65-check suites ran only as
+  direct `python tests/X.py` invocations in CI — under-reporting coverage. The
+  underlying scripts are unchanged and still run directly and in CI; the live
+  phase-3 server and LFS-checkpoint RAG probes remain CI-only to keep `pytest`
+  fast and hermetic. *Verification:* `pytest tests/ -q` → **11 passed**.
+
 ### Fixed
 - **`launch_ddp.sh` no longer hardcodes `MASTER_PORT=29500`.** A fixed rendezvous
   port collides with "address already in use" on back-to-back local runs or a

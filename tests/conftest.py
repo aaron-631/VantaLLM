@@ -1,11 +1,15 @@
 """
 pytest configuration for VantaLLM.
 
-Only test_smoke.py is written as pytest-native cases. The other files in this
-directory are standalone, script-style suites (``if __name__ == "__main__"``)
-that drive the FastAPI server, SSE streaming, and RAG paths — they are run
-directly (and in CI) rather than collected by pytest. Excluding them here keeps
-``pytest tests/`` fast and green without duplicating that harness.
+``test_smoke.py`` holds the pytest-native unit cases, and
+``test_suites_pytest.py`` wraps the CPU-safe, checkpoint-free script suites
+(``test_task3.py`` and ``test_system.py`` phases 1–2) as subprocess-driven
+pytest tests so ``pytest tests/`` reports real coverage rather than just the
+smoke set. The remaining files here are standalone, script-style suites
+(``if __name__ == "__main__"``) that drive the live FastAPI server, SSE
+streaming, LFS-checkpoint, and RAG paths — they are run directly (and in CI)
+rather than collected by pytest. Excluding them here keeps ``pytest tests/``
+fast, hermetic, and green without duplicating that harness.
 """
 
 import os
