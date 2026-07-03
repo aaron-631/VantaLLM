@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **`launch_ddp.sh` no longer hardcodes `MASTER_PORT=29500`.** A fixed rendezvous
+  port collides with "address already in use" on back-to-back local runs or a
+  stale socket. When `MASTER_PORT` is unset the launcher now binds an ephemeral
+  free port (via a small `socket.bind(("",0))` probe, interpreter selected as
+  `.venv/bin/python` → `python3` → `python`, falling back to 29500 if none), while
+  still honoring an explicitly-exported `MASTER_PORT` (required for multi-node
+  rendezvous). The port has no effect on training results.
+
 ### Changed
 - **`launch_deepspeed.sh` defaults to ZeRO-2 instead of ZeRO-3 (audit Finding
   F22).** The launcher previously defaulted to `zero3.json`, which offloads
