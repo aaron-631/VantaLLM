@@ -257,7 +257,7 @@ def save_tokenizer(tokenizer) -> str:
         "min_frequency" : MIN_FREQUENCY,
         "dataset"       : DATASETS,
         "type"          : "ByteLevelBPE",
-        "description"   : "Custom cybersecurity BPE tokenizer for the VantaLM architecture",
+        "description"   : "Custom cybersecurity BPE tokenizer for the VantaLLM architecture",
         "special_tokens": {
             "pad_token"  : "<pad>",
             "eos_token"  : "<eos>",

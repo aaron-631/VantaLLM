@@ -1,7 +1,7 @@
 """
 tokenizer.py — Token & Output Engineer
 =================================================
-Production-grade Cybersecurity BPE Tokenizer for the VantaLM architecture.
+Production-grade Cybersecurity BPE Tokenizer for the VantaLLM architecture.
 """
 
 import os

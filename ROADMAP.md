@@ -8,7 +8,7 @@ The following outlines the immediate and long-term architectural priorities for 
 - **DeepSpeed ZeRO-3 Validations:** Run physical experiments using the analytical 125B configurations on multi-node topologies.
 
 ## Long-Term Vision (Q4 2026 and Beyond)
-- **Mixture of Experts (MoE):** Introduce sparse expert routing to increase parameter counts without equivalent scaling in FLOPs.
+- **MoE Routing Refinement:** Enhance sparse expert routing with stronger load-balancing behavior and better utilization visibility.
 - **Extended Context:** Implement sliding window attention or ring-attention mechanisms for >128k context lengths.
 - **Open-Source Checkpoints:** Release fully converged foundational model weights based on the 567M architecture.
 

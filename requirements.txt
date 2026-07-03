@@ -12,7 +12,6 @@ uvicorn
 # torch==2.11.0
 # CRITICAL: For GPU (A100/CUDA 12.1), you MUST install torch manually with the CUDA wheel:
 # pip install torch==2.11.0+cu121 --index-url https://download.pytorch.org/whl/cu121
-# To use the verified GPU day environment, use: pip install -r requirements_lock_gpu_day.txt
 # Only use the bare 'pip install torch' for CPU-only local development.
 pydantic
 transformers

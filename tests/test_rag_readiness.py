@@ -57,7 +57,7 @@ def run_rag_test():
     print(f"Using device: {device}")
 
     # 2. Load Tokenizer
-    # Assuming this script is run from the root of the VantaLM repository
+    # Assuming this script is run from the root of the VantaLLM repository
     tokenizer_dir = os.path.join(os.path.dirname(__file__), '..', 'vantallm', 'tokenizer', 'cybersec_tokenizer')
     os.environ['TOKENIZER_PATH'] = tokenizer_dir
     tokenizer = load_tokenizer()

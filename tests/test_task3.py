@@ -18,7 +18,7 @@ import torch.nn as nn
 from vantallm.model.transformer import RMSNorm
 
 # ── Config (matches architecture diagram) ──────────────────────────
-VOCAB_SIZE = 151000
+VOCAB_SIZE = 151003
 EMBED_DIM  = 4096
 BATCH_SIZE = 2
 SEQ_LEN    = 10

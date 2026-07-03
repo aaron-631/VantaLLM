@@ -1,5 +1,5 @@
 """
-dedup_merge.py — VantaLM Global Delta Extractor
+dedup_merge.py — VantaLLM Global Delta Extractor
 =================================================
 Scans raw/pretrain/, checks a global memory hash, and outputs ONLY 
 brand-new unique documents as a timestamped delta batch.

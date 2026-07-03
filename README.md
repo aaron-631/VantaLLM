@@ -137,7 +137,7 @@ You can then submit generation requests via standard HTTP POST calls.
 ## Roadmap
 
 - [ ] Implement FlashAttention-2 natively into the Transformer core.
-- [ ] Add MoE (Mixture of Experts) architectural support.
+- [ ] Enhance MoE routing with load-balancing loss.
 - [ ] Expand the analytical multi-node DeepSpeed ZeRO-3 configurations.
 - [ ] Release pre-trained base model weights.
 
@@ -161,4 +161,4 @@ If you use VantaLLM in your research or project, please cite it as:
 
 ## Contributing
 
-We welcome community contributions. Please review the `CONTRIBUTING.md` (coming soon) before submitting PRs. Make sure to run all unit tests and verify your code formatting.
+We welcome community contributions. Please review [CONTRIBUTING.md](CONTRIBUTING.md) before submitting PRs. Make sure to run all unit tests and verify your code formatting.

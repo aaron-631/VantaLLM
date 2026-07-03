@@ -1,5 +1,5 @@
 #!/bin/bash
-# Minimal DDP Launcher for VantaLM
+# Minimal DDP Launcher for VantaLLM
 # Usage: ./launch_ddp.sh <num_gpus>
 #
 # REQUIRED: Export these env vars in your shell BEFORE calling this script:
@@ -28,4 +28,4 @@ fi
     --nproc_per_node=$NUM_GPUS \
     --master_addr=$MASTER_ADDR \
     --master_port=$MASTER_PORT \
-    training/train.py
+    vantallm/training/train.py

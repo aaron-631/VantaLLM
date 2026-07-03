@@ -1,5 +1,5 @@
 """
-tokenize_data.py — VantaLM Incremental Tokenizer
+tokenize_data.py — VantaLLM Incremental Tokenizer
 ==================================================
 Reads manifest, hashes normalized files, skips matches, tokenizes only new data.
 """

@@ -1,5 +1,5 @@
 """
-test_stream.py — VantaLM Streaming Test
+test_stream.py — VantaLLM Streaming Test
 ==========================================
 Run AFTER the server is up:
 
@@ -128,7 +128,7 @@ TESTS = [
 
 def main():
     print("=" * 60)
-    print("VantaLM  —  SSE Streaming Test Suite")
+    print("VantaLLM  —  SSE Streaming Test Suite")
     print("=" * 60)
 
     if not check_health():

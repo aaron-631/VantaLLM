@@ -1,5 +1,5 @@
 """
-transformer.py — VantaLM decoder-only transformer.
+transformer.py — VantaLLM decoder-only transformer.
 
 A single, self-contained model definition that combines the base transformer,
 optional persona-aware conditioning, and a lightweight PPO/RL training scaffold.
@@ -751,7 +751,7 @@ class TransformerBlock(nn.Module):
 
 class VantaTransformer(nn.Module):
     """
-    The full VantaLM model — a single, config-driven transformer class.
+    The full VantaLLM model — a single, config-driven transformer class.
 
     Model size is set entirely by ``LLMConfig``; the largest scaling-reference
     config has an analytically estimated ~125B stored parameters with ~2-4B
@@ -1247,7 +1247,7 @@ def load_model(
     if not use_tiny and not os.environ.get("MODEL_CONFIG", "").strip():
         raise RuntimeError(
             "CRITICAL OPERATIONAL ERROR: TINY_MODEL=0 (or unset) but no MODEL_CONFIG provided.\n"
-            "The default VantaLM architecture is ~125B parameters and will not fit on a single workstation GPU.\n"
+            "The default VantaLLM architecture is ~125B parameters and will not fit on a single workstation GPU.\n"
             "To run on a single GPU, specify a smaller config:\n"
             "  export MODEL_CONFIG=configs/vanta_567m.json\n"
             "Or use TINY_MODEL=1 for local CPU smoke tests."
@@ -1336,7 +1336,7 @@ def _demo():
     torch.manual_seed(42)
 
     print("\n" + "=" * 70)
-    print("  VantaLM  —  Architecture Sanity Check")
+    print("  VantaLLM  —  Architecture Sanity Check")
     print("=" * 70)
 
     for mode in ["fp16", "int8", "int4"]:

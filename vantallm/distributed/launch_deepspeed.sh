@@ -1,5 +1,5 @@
 #!/bin/bash
-# Minimal DeepSpeed Launcher for VantaLM
+# Minimal DeepSpeed Launcher for VantaLLM
 # Usage: ./launch_deepspeed.sh <num_gpus> <config_path>
 #
 # REQUIRED: Export these env vars in your shell BEFORE calling this script:
@@ -15,7 +15,7 @@
 # gradient_checkpointing flag (model-level, uses torch.utils.checkpoint).
 
 NUM_GPUS=${1:-1}
-CONFIG_PATH=${2:-"distributed/deepspeed_configs/zero3.json"}
+CONFIG_PATH=${2:-"vantallm/distributed/deepspeed_configs/zero3.json"}
 
 echo "Launching DeepSpeed with $NUM_GPUS GPUs..."
 echo "Using config: $CONFIG_PATH"
@@ -23,6 +23,6 @@ echo "Using config: $CONFIG_PATH"
 # Pass --deepspeed flag to train.py when ready
 deepspeed \
     --num_gpus=$NUM_GPUS \
-    training/train.py \
+    vantallm/training/train.py \
     --deepspeed \
     --deepspeed_config=$CONFIG_PATH

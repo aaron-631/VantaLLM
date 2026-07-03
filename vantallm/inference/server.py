@@ -1,5 +1,5 @@
 """
-VantaLM Inference Server
+VantaLLM Inference Server
 
 
 Fixes over v8.2
@@ -657,7 +657,7 @@ def load_model() -> VantaTransformer:
     if not use_tiny and not os.environ.get("MODEL_CONFIG", "").strip():
         raise RuntimeError(
             "CRITICAL OPERATIONAL ERROR: TINY_MODEL=0 (or unset) but no MODEL_CONFIG provided.\n"
-            "The default VantaLM architecture is ~125B parameters and will not fit on a single workstation GPU.\n"
+            "The default VantaLLM architecture is ~125B parameters and will not fit on a single workstation GPU.\n"
             "To run on a single GPU, specify a smaller config:\n"
             "  export MODEL_CONFIG=configs/vanta_567m.json\n"
             "Or use TINY_MODEL=1 for local CPU smoke tests."
@@ -765,7 +765,7 @@ async def lifespan(app: FastAPI):
 # ==============================================================================
 
 app = FastAPI(
-    title="VantaLM Inference Server",
+    title="VantaLLM Inference Server",
     version="9.0.0",
     lifespan=lifespan,
 )

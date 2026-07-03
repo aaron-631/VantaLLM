@@ -1,7 +1,7 @@
 #!/bin/bash
 set -euo pipefail
 
-echo "Starting VantaLM incremental pipeline..."
+echo "Starting VantaLLM incremental pipeline..."
 
 # 1. Process standard open-source files in base raw/
 python3 data_pipeline/normalize_data.py

@@ -132,7 +132,7 @@ def validate():
 
 
     # 3. Verify Token Validity
-    # Vocab size is 151,003. All tokens should be within [0, 151000).
+    # Vocab size is 151,003. All tokens should be within [0, 151003).
     max_token = torch.max(sample_ids).item()
     min_token = torch.min(sample_ids).item()
     log.info(f"Token range in first sample: [{min_token}, {max_token}]")
@@ -147,49 +147,6 @@ def validate():
     log.info(f"Dataloader batch shape: {batch_ids.shape}")
     
     log.info("FINAL VERIFICATION SUCCESSFUL: Pipeline outputs are training-ready.")
-
-def _smoke_test_no_shards():
-    """
-    Minimal GPU smoke test when no shards exist.
-    Loads model in vanta_567m config, runs one forward+backward pass on synthetic data,
-    and confirms loss is finite. Does NOT test the data pipeline.
-    """
-    import sys
-    sys.path.insert(0, os.path.dirname(__file__))
-    try:
-        import torch
-        from vantallm.model.transformer import load_model, LLMConfig
-        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        log.info(f"Smoke test device: {device}")
-
-        model = load_model().to(device)
-        if torch.cuda.is_available():
-            model = model.to(torch.bfloat16)
-        model.train()
-
-        B, S = 2, 128
-        ids    = torch.randint(0, 151003, (B, S), device=device)
-        p_ids  = torch.zeros((B, 3), dtype=torch.long, device=device)
-        labels = ids.clone()
-
-        out = model(ids, persona_ids=p_ids, labels=labels)
-        loss = out["loss"]
-
-        assert not torch.isnan(loss), f"NaN loss in smoke test: {loss.item()}"
-        assert not torch.isinf(loss), f"Inf loss in smoke test: {loss.item()}"
-        loss.backward()
-
-        if torch.cuda.is_available():
-            alloc = torch.cuda.memory_allocated() / 1e6
-            peak  = torch.cuda.max_memory_allocated() / 1e6
-            log.info(f"Smoke test VRAM | Alloc: {alloc:.0f}MB | Peak: {peak:.0f}MB")
-
-        log.info(f"SMOKE TEST PASSED — Loss: {loss.item():.4f}. Model is healthy.")
-        log.info("NOTE: Data pipeline NOT validated. Run full shard pipeline before long training runs.")
-
-    except Exception as e:
-        log.error(f"SMOKE TEST FAILED: {e}")
-        raise
 
 if __name__ == "__main__":
     validate()

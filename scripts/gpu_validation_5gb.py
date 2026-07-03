@@ -1,7 +1,7 @@
 """
 gpu_validation_5gb.py — Staged GPU Validation for 5GB A100 MIG
 ==============================================================
-Single-GPU smoke validation for the VantaLM training stack.
+Single-GPU smoke validation for the VantaLLM training stack.
 Validates: CUDA, BF16, Tiny-Model Training, Checkpoint Save/Load, Inference.
 """
 
@@ -79,7 +79,7 @@ def validate_training():
         "MODEL_PATH": ""    # Start from random weights
     }
     log_gpu_stats("Pre-Training")
-    success, output = run_command("python3 training/train.py", env_vars=env)
+    success, output = run_command("python3 vantallm/training/train.py", env_vars=env)
     log_gpu_stats("Post-Training")
     
     if success:
@@ -169,7 +169,7 @@ def main():
             
     log.info("="*50)
     log.info("ALL GPU VALIDATION STEPS PASSED.")
-    log.info("VantaLM has successfully executed on real NVIDIA GPU hardware.")
+    log.info("VantaLLM has successfully executed on real NVIDIA GPU hardware.")
 
 if __name__ == "__main__":
     main()

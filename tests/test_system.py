@@ -1,5 +1,5 @@
 """
-test_system.py  —  VantaLM Full System Validation
+test_system.py  —  VantaLLM Full System Validation
 =====================================================
 Tests every layer in order:
 
@@ -854,7 +854,7 @@ def summary():
 # ══════════════════════════════════════════════════════════════════
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="VantaLM system test")
+    parser = argparse.ArgumentParser(description="VantaLLM system test")
     parser.add_argument("--phase", type=int, choices=[1, 2, 3],
                         help="Run only phase 1, 2, or 3 (default: all)")
     args = parser.parse_args()

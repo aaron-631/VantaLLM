@@ -1,5 +1,5 @@
 """
-normalize_data.py — VantaLM Incremental Data Normalizer
+normalize_data.py — VantaLLM Incremental Data Normalizer
 =========================================================
 Standardizes records, trims whitespace, and ensures unicode safety.
 Reads the manifest to skip unchanged raw files, preventing redundant I/O overhead.

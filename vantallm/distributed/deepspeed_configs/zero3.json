@@ -18,8 +18,8 @@
       "pin_memory": true
     }
   },
-  "train_batch_size": 4,
-  "gradient_accumulation_steps": 1,
+  "train_micro_batch_size_per_gpu": 2,
+  "gradient_accumulation_steps": 2,
   "fp16": { "enabled": false },
   "bf16": { "enabled": true },
   "zero_allow_untested_optimizer": true,

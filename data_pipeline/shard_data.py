@@ -1,5 +1,5 @@
 """
-shard_data.py — VantaLM Append-Only Sharder
+shard_data.py — VantaLLM Append-Only Sharder
 =============================================
 Loads only un-sharded tensors, appends them starting from last_shard_index.
 """

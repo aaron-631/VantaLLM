@@ -1,5 +1,5 @@
 """
-fetch_large.py — VantaLM Large-Scale Data Fetcher
+fetch_large.py — VantaLLM Large-Scale Data Fetcher
 ==================================================
 Fetches from 4 HuggingFace datasets using streaming=True.
 Writes to data_pipeline/raw/ in {"text": "..."} format.

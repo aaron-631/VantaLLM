@@ -1,5 +1,5 @@
 """
-train.py — VantaLM training loop.
+train.py — VantaLLM training loop.
 
 Standard forward → loss → backward → optimizer step, with support for both
 single-process and distributed (DDP / DeepSpeed) execution.
@@ -385,8 +385,9 @@ def sanity_check_loop():
             start_step = client_state.get("step", 0)
             log_info(f"Restored DeepSpeed start_step: {start_step}")
 
-    batch_size = int(os.environ.get("BATCH_SIZE", 4))
-    grad_accum_steps = int(os.environ.get("GRAD_ACCUM_STEPS", 1))
+    # Optimization & Hardware
+    batch_size = int(os.environ.get("BATCH_SIZE", 2))
+    grad_accum_steps = int(os.environ.get("GRAD_ACCUM_STEPS", 16))
 
     if is_deepspeed_engine(model) and grad_accum_steps > 1:
         log_warning(

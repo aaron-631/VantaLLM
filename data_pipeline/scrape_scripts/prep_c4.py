@@ -1,5 +1,5 @@
 """
-prep_c4.py — C4 / RedPajama Preprocessing Script for VantaLM
+prep_c4.py — C4 / RedPajama Preprocessing Script for VantaLLM
 ===============================================================
 Converts a raw RedPajama C4 JSONL shard into a clean pipeline-ready file
 that can be dropped into data_pipeline/raw/ and consumed by run_pipeline.sh
@@ -7,7 +7,7 @@ that can be dropped into data_pipeline/raw/ and consumed by run_pipeline.sh
 Input schema (RedPajama C4):
     {"text": "...", "meta": {"url": "...", "timestamp": "...", ...}, "red_pajama_subset": "c4"}
 
-Output schema (VantaLM raw/ format):
+Output schema (VantaLLM raw/ format):
     {"text": "..."}
 
 Preprocessing steps applied:
@@ -463,7 +463,7 @@ def process_file(
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Preprocess RedPajama C4 JSONL shards for VantaLM",
+        description="Preprocess RedPajama C4 JSONL shards for VantaLLM",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     group = parser.add_mutually_exclusive_group(required=True)

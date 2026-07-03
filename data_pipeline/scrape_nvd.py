@@ -1,5 +1,5 @@
 """
-scrape_nvd.py — VantaLM NVD/CVE Data Ingestor
+scrape_nvd.py — VantaLLM NVD/CVE Data Ingestor
 ===============================================
 Fetches CVE descriptions from a stable mirror (HuggingFace) to 
 provide a foundational cybersecurity vocabulary layer.
