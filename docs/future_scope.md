@@ -30,7 +30,7 @@ never executed.
 
 | Tier | Resource | Notes |
 |---|---|---|
-| Free (grant) | Google TPU Research Cloud (TRC) | Free TPU v3/v4 access for research proposals; VantaLLM + a cybersecurity training goal is a fitting application. |
+| Free (grant) | Google TPU Research Cloud (TRC) | Free TPU v3/v4 access for research proposals; VantaLLM + a cybersecurity training goal is a fitting application. *Caveat: requires a `torch_xla` backend port; the current CUDA/DeepSpeed path targets the GPU providers below.* |
 | Free (quota) | Kaggle Kernels | ~30 GPU-hours/week (P100/T4), no card required — enough for small real runs. |
 | Free (grant) | Hugging Face community compute grants | Aimed at open-source model projects. |
 | Free (credits) | Cloud provider student/startup credits | Google Cloud / AWS / Azure typically offer $100–300 in credits. |
@@ -42,8 +42,9 @@ never executed.
    this without code changes.
 2. Point the pipeline at a **larger, higher-quality cybersecurity corpus** (see
    Track 2) rather than the current example mixture.
-3. Train, evaluate (Track 2), and **publish to Hugging Face** with a model card,
-   intended-use statement, and evaluation results.
+3. Train, evaluate (Track 2), and **publish to Hugging Face** (target:
+   `aaron-631/VantaLLM-cyber-1B`) with a model card, intended-use statement, and
+   evaluation results.
 
 ---
 
