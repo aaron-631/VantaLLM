@@ -8,6 +8,24 @@ The model architecture, training pipeline, and configurations were designed and 
 
 > **Note:** Trained model weights are not included in this repository due to size constraints. This repository ships the full training, inference, tokenizer, and distributed-systems stack required to reproduce runs from source. If you cloned the repo without hydrating Git-LFS, checkpoint-backed tests and resume flows will be present in code but the actual `.pt` files will be missing until you run `git lfs pull`.
 
+## At A Glance
+
+A from-scratch PyTorch framework for training decoder-only language models, built and trained end-to-end rather than assembled from high-level libraries.
+
+- **Modern architecture, implemented from scratch:** RoPE, GQA, RMSNorm, SwiGLU, and alternating dense/MoE feedforward blocks with top-k expert routing.
+- **Real distributed training:** PyTorch DDP and DeepSpeed ZeRO, rank-safe checkpoint and resume, free-port autodetection, and validation-first cluster bring-up.
+- **Complete data pipeline:** offline normalization, deduplication, tokenization, and binary sharding, with manifest-backed reproducibility.
+- **Tested and CI-backed:** architecture demo, distributed validator, GPU-readiness checks, and a pytest suite.
+- **Concrete result:** completed a 30,000-step training run of the 567M-parameter config on a single 20GB A100. The same codepaths scale to the 125B and 235B configs analytically through JSON configuration alone.
+
+Quick start:
+
+```bash
+pip install -e .
+python3 -m vantallm.model.transformer   # architecture sanity check
+python3 verify_distributed.py            # distributed bring-up check
+```
+
 ## What This Project Demonstrates
 
 VantaLLM is intended to read like a serious end-to-end LLM systems project, not just a model definition. The repository demonstrates:
