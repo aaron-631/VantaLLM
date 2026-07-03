@@ -91,6 +91,7 @@ Notes:
 - The training loop currently uses `bitsandbytes.optim.PagedAdamW8bit`; install `bitsandbytes` before running training jobs.
 - Copy `.env.example` to `.env` only if you want a local environment file for your own workflow.
 - Do not use GitHub's "Download ZIP" flow if you expect checkpoint files; it can leave Git-LFS pointers unhydrated.
+- If you plan to move checkpoints between machines, preserve the matching tokenizer assets under `vantallm/tokenizer/cybersec_tokenizer/` and the exact JSON model config used to create the weights.
 
 Recommended installs:
 
@@ -232,12 +233,14 @@ These personas are not separate models; they are routing and conditioning modes 
 ## Operational Notes
 
 - `TRAIN_STEPS` is mandatory and is treated as an **absolute target step**, not “additional steps from the checkpoint.”
+- On unfamiliar hardware or a new cluster image, make the first run a bounded validation with `TRAIN_STEPS=2` before attempting longer jobs.
 - `./run_pipeline.sh` is the supported operator entrypoint for dataset processing.
 - Do not manually edit `data_pipeline/pipeline_manifest.json` or `data_pipeline/global_hash_log.json`.
 - Do not rename shard files by hand.
 - The 567M config is the validated public reference path for A100 20GB-class bring-up.
 - Hardware scaling is driven by a small set of knobs: `MODEL_CONFIG`, `BATCH_SIZE`, `GRAD_ACCUM_STEPS`, `QUANT_MODE`, and the DeepSpeed JSON configs.
 - On larger GPUs, start from the validated 567M contract and raise per-GPU batch or reduce accumulation only after the baseline path is stable.
+- Change one major variable at a time when debugging distributed runs. Topology, ZeRO stage, batch size, and model config should not all move in the same iteration.
 - For long or expensive distributed jobs, use `tmux` or `screen` so initialization delays do not kill the session.
 - High-capacity GPUs and larger multi-node deployments are documented as an additional capability in [docs/gpu_cluster_guide.md](docs/gpu_cluster_guide.md); they are not a separate codebase or special branch.
 

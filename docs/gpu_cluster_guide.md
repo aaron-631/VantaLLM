@@ -21,6 +21,8 @@ export PYTHONUNBUFFERED=1
 
 If you are starting a long DDP or DeepSpeed run, use `tmux` or `screen` first.
 
+For GPU-backed DeepSpeed runs, make sure the full NVIDIA CUDA Toolkit is installed so `nvcc` is available, and ensure both `$PATH` and `$LD_LIBRARY_PATH` expose the active CUDA install. DeepSpeed extension builds are sensitive to version skew, so keep the installed DeepSpeed package aligned with the PyTorch CUDA wheel and toolkit version on the host.
+
 ## Hardware Validation
 
 Before initiating large-scale training, validate the CUDA execution environment and memory allocation compatibility. 
@@ -41,6 +43,14 @@ The cleanest staged path is:
 5. `MODEL_CONFIG=configs/vanta_567m.json TRAIN_STEPS=1000 DATA_MODE=shard bash vantallm/distributed/launch_deepspeed.sh <gpus>`
 
 The important rule is to validate topology first, then local training, then shard-backed training, and only then escalate to multi-rank orchestration.
+
+## Bring-Up Discipline
+
+Treat early GPU work as controlled validation, not as a throughput race:
+
+1. Change one variable at a time. Do not alter model config, batch size, ZeRO stage, topology, and environment variables simultaneously.
+2. Use bounded runs first. On a new GPU type, node image, or NCCL topology, start with `TRAIN_STEPS=2` so hangs, OOMs, and allocator regressions fail quickly and readably.
+3. Record an environment snapshot for expensive runs. At minimum, save `nvidia-smi`, `python3 -c "import torch; print(torch.__version__, torch.version.cuda, torch.cuda.nccl.version())"`, and the exact `MODEL_CONFIG` / DeepSpeed JSON used for the launch.
 
 ## Distributed Launch Instructions
 
