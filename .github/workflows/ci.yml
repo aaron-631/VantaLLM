@@ -1,0 +1,64 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  cpu-smoke:
+    name: CPU smoke suite (TINY_MODEL)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      # Make the repo importable as `vantallm` for every step (pytest collection
+      # imports it before any sys.path shim runs).
+      PYTHONPATH: ${{ github.workspace }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install CPU PyTorch (pinned to verified wheel)
+        run: pip install torch==2.11.0 --index-url https://download.pytorch.org/whl/cpu
+
+      - name: Install pinned runtime + dev dependencies
+        run: pip install -r requirements-dev.txt
+
+      - name: Pytest smoke suite
+        env:
+          TINY_MODEL: "1"
+        run: pytest tests/ -q
+
+      - name: Architecture demo (built-in self-check)
+        env:
+          TINY_MODEL: "1"
+        run: python -m vantallm.model.transformer
+
+      - name: Structural tests
+        env:
+          TINY_MODEL: "1"
+        run: python tests/test_task3.py
+
+      - name: System suite — unit (phase 1)
+        env:
+          TINY_MODEL: "1"
+        run: python tests/test_system.py --phase 1
+
+      - name: System suite — integration (phase 2)
+        env:
+          TINY_MODEL: "1"
+        run: python tests/test_system.py --phase 2
+
+      - name: System suite — end-to-end server (phase 3)
+        env:
+          TINY_MODEL: "1"
+        run: python tests/test_system.py --phase 3
+
+      - name: Distributed bring-up (single process)
+        run: python verify_distributed.py

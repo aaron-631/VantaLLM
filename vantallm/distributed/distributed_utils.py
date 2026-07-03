@@ -76,9 +76,14 @@ def prepare_distributed_model(model, optimizer, lr_scheduler, is_distributed: bo
                 rank_safe_log(f"WARNING: Rank {local_rank} is pre-Ampere. BF16 performance may be suboptimal.", local_rank, "warning")
             
             model = torch.nn.parallel.DistributedDataParallel(
-                model, 
+                model,
                 device_ids=[local_rank],
-                # Sparse MoE experts can receive no tokens on a rank in a step.
+                # The inference-only persona_vec_to_composite projection receives
+                # no gradient on the training (persona_ids) path, so it is unused
+                # in the backward. Keep this True so DDP tolerates it (and stays
+                # robust to future conditional-compute / frozen-layer changes).
+                # NOTE: MoE experts do NOT need this — the dense per-expert
+                # dispatch loop gives every expert a gradient even with 0 tokens.
                 find_unused_parameters=True,
             )
         else:

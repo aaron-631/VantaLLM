@@ -734,8 +734,9 @@ class MoELayer(nn.Module):
                 expert_tokens = expert_tokens[top_idx]
                 expert_weights = expert_weights[top_idx]
 
-            # Process tokens through the expert and accumulate back into 'out'
-            # scatter_add_ is used to handle potential multiple-slot assignments safely
+            # Process tokens through the expert and accumulate back into 'out'.
+            # index_add_ safely handles a token routed to the same expert in
+            # multiple top-k slots (duplicate indices accumulate rather than overwrite).
             expert_out = expert_weights * self.experts[e](expert_tokens)
             out.index_add_(0, t_indices, expert_out)
 

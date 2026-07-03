@@ -7,6 +7,6 @@ authors:
 title: "VantaLLM: A modular framework for training decoder-only transformer language models"
 version: 1.0.0
 date-released: 2026-07-03
-url: "https://github.com/aaronchakraborty/VantaLLM"
-repository-code: "https://github.com/aaronchakraborty/VantaLLM"
+url: "https://github.com/aaron-631/VantaLLM"
+repository-code: "https://github.com/aaron-631/VantaLLM"
 license: Apache-2.0

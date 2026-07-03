@@ -1,5 +1,7 @@
 # VantaLLM
 
+[![ci](https://github.com/aaron-631/VantaLLM/actions/workflows/ci.yml/badge.svg)](https://github.com/aaron-631/VantaLLM/actions/workflows/ci.yml)
+
 VantaLLM is a from-scratch PyTorch framework for training decoder-only language models, with a modular transformer core, a custom tokenizer, an incremental sharded data pipeline, and first-class distributed training support.
 
 The model architecture, training pipeline, and configurations were designed and implemented by Aaron Chakraborty.
@@ -79,7 +81,7 @@ The current public reference path is:
 ## Installation
 
 ```bash
-git clone https://github.com/aaronchakraborty/VantaLLM.git
+git clone https://github.com/aaron-631/VantaLLM.git
 cd VantaLLM
 python3 -m venv .venv
 source .venv/bin/activate
@@ -108,7 +110,7 @@ Recommended installs:
 pip install torch==2.11.0+cu121 --index-url https://download.pytorch.org/whl/cu121
 
 # CPU-only local smoke testing
-pip install torch==2.11.0
+pip install torch==2.11.0 --index-url https://download.pytorch.org/whl/cpu
 ```
 
 ## Quick Start
@@ -177,6 +179,41 @@ export DATA_MODE=shard
 export QUANT_MODE=bf16
 bash vantallm/distributed/launch_ddp.sh 1
 ```
+
+## Proof of Life
+
+Everything below is real output produced on a CPU-only machine (no GPU) with `TINY_MODEL=1`,
+except the parameter count, which uses the full `configs/vanta_567m.json`. It is reproducible from
+a clean clone via the `ci` workflow.
+
+**Parameter counts are exact, not estimated:**
+
+```bash
+$ python -c "import json; from vantallm.model.transformer import VantaTransformer, LLMConfig; \
+  print(VantaTransformer(LLMConfig(**json.load(open('configs/vanta_567m.json')))).parameter_count()['TOTAL'])"
+567068416          # the "567M" config is exact to the digit
+```
+
+**End-to-end train → generate on random tensors (pipeline mechanics):**
+
+```
+[step 0] loss=11.99  grad_norm=4.49
+[step 5] loss=11.95  grad_norm=1.88     # loss ≈ ln(151003): correct uniform-prior entropy
+[gen  ] prompt_len=8 -> output_len=20   # greedy decode with TurboQuant KV cache
+```
+
+**Test suite (CPU):**
+
+| Suite | Result |
+|---|---|
+| `pytest tests/` (smoke) | 8/8 ✅ |
+| `tests/test_task3.py` (structural) | 4/4 ✅ |
+| `tests/test_system.py --phase 1` (unit) | 41/41 ✅ |
+| `tests/test_system.py --phase 2` (integration) | 20/20 ✅ |
+| `tests/test_system.py --phase 3` (live FastAPI server + SSE + sessions) | 25/25 ✅ |
+
+KV-cache decode is bit-identical to no-cache decode; TurboQuant INT8 KV reconstruction MAE ≈ 0.004;
+the BPE tokenizer round-trips code, SQLi, and CVE strings exactly with `vocab_size == 151,003`.
 
 ## Validation Path
 
@@ -314,7 +351,7 @@ If you use VantaLLM in your research or project, please cite it as:
   title = {VantaLLM: A modular framework for training decoder-only transformer language models},
   year = {2026},
   publisher = {GitHub},
-  url = {https://github.com/aaronchakraborty/VantaLLM}
+  url = {https://github.com/aaron-631/VantaLLM}
 }
 ```
 

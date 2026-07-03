@@ -1,26 +1,26 @@
-# NOTE: torch must be installed separately with the correct CUDA wheel.
-# GPU (A100, CUDA 12.1): pip install torch==2.11.0+cu121 --index-url https://download.pytorch.org/whl/cu121
-# CPU-only dev:          pip install --index-url https://download.pytorch.org/whl/cpu torch
+# ─────────────────────────────────────────────────────────────────────────────
+# VantaLLM runtime dependencies (pinned for reproducibility — audit Finding 2).
+#
+# torch is intentionally NOT pinned here; install the wheel matching your target:
+#   GPU (A100, CUDA 12.1): pip install torch==2.11.0+cu121 --index-url https://download.pytorch.org/whl/cu121
+#   CPU-only dev/smoke:    pip install --index-url https://download.pytorch.org/whl/cpu torch
+# Optional (GPU 8-bit optimizer): pip install bitsandbytes
+#
+# Versions below are the exact set verified end-to-end on CPU
+# (see CHANGELOG.md). Bump deliberately, not implicitly.
+# ─────────────────────────────────────────────────────────────────────────────
 
-fastapi
-uvicorn
-# For GPU (A100/CUDA 12.1) — install manually:
-# pip install torch==2.11.0+cu121 --index-url https://download.pytorch.org/whl/cu121
-# For CPU-only (local dev/smoke test):
-# pip install --index-url https://download.pytorch.org/whl/cpu torch
-# Optional: pip install bitsandbytes
-# CRITICAL: For GPU (A100/CUDA 12.1), you MUST install torch manually with the CUDA wheel:
-# pip install torch==2.11.0+cu121 --index-url https://download.pytorch.org/whl/cu121
-# Only use the CPU index path above for local development.
-pydantic
-transformers
-tokenizers
-requests
-numpy
-pandas
-ipykernel
-wrapt
-datasets
-safetensors
-ninja
-deepspeed
+fastapi==0.136.1
+uvicorn==0.46.0
+pydantic==2.13.3
+transformers==5.8.0
+tokenizers==0.22.2
+requests==2.33.1
+numpy==2.4.4
+pandas==3.0.2
+ipykernel==7.2.0
+wrapt==2.1.2
+datasets==4.8.5
+safetensors==0.7.0
+ninja==1.13.0
+deepspeed==0.19.0
