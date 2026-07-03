@@ -8,6 +8,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Future-scope roadmap (`docs/future_scope.md`).** Documented the two-track
+  path from the current 567M framework to a published cybersecurity model:
+  (1) a resource-efficient route to a small-but-real 1B–3B model on free/low-cost
+  compute (TRC, Kaggle, HF grants, spot GPUs), and (2) the engineering
+  methodology that makes the result credible — domain-adapting an open base via a
+  load-external-weights path, LoRA/QLoRA proof, a cyber evaluation benchmark
+  showing measurable lift, and a defensive dual-use posture. Linked from the
+  README (Read First, Documentation Map, Roadmap).
 - **`pytest tests/` now reports real coverage (11 tests, was 8).** Added
   `tests/test_suites_pytest.py`, which wraps the CPU-safe, checkpoint-free script
   suites (`test_task3.py`, `test_system.py` phases 1–2) as subprocess-driven

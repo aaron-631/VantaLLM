@@ -71,6 +71,7 @@ The codebase is GPU-agnostic by design: it runs on small local setups for struct
 - [docs/inference_rag_guide.md](docs/inference_rag_guide.md): prompt parity, RAG routes, serving API, and persona routing.
 - [docs/operational_handoff.md](docs/operational_handoff.md): live continuation path, checkpoint discipline, and operator sequence.
 - [data_pipeline/DATASET_SPEC.md](data_pipeline/DATASET_SPEC.md): slice/shard contract and dataset manufacturing assumptions.
+- [docs/future_scope.md](docs/future_scope.md): the two-track path from the current 567M framework to a published, domain-adapted cybersecurity model — resourcing strategy and engineering methodology.
 - [CONTRIBUTING.md](CONTRIBUTING.md): contribution workflow.
 
 The documentation set is intentionally small. Each file is supposed to answer a different operational question rather than restate the same material in different wording.
@@ -321,6 +322,7 @@ These personas are not separate models; they are routing and conditioning modes 
 - [docs/technical_report.md](docs/technical_report.md): architectural explanation and scaling methodology.
 - [docs/gpu_cluster_guide.md](docs/gpu_cluster_guide.md): hardware validation, DDP, DeepSpeed, and “big GPU” operational notes.
 - [docs/inference_rag_guide.md](docs/inference_rag_guide.md): prompt parity, RAG validation, FastAPI routes, and persona behaviour.
+- [docs/future_scope.md](docs/future_scope.md): two-track roadmap to a domain-adapted cybersecurity model (resourcing + engineering methodology).
 - [data_pipeline/DATASET_SPEC.md](data_pipeline/DATASET_SPEC.md): dataset lifecycle, slice/shard terminology, and manifest contract.
 
 ## Repository Layout
@@ -343,7 +345,7 @@ VantaLLM/
 ├── verify_distributed.py
 ├── configs/            # JSON architectural scaling configurations
 ├── data_pipeline/      # Dataset ingestion, tokenization, and sharding tools
-├── docs/               # Technical reports and extensive documentation
+├── docs/               # Technical reports, guides, and future_scope.md
 ├── scripts/            # Utility and hardware validation scripts
 ├── vantallm/           # Core framework package
 │   ├── distributed/
@@ -362,6 +364,12 @@ VantaLLM/
 - [ ] Enhance MoE routing with load-balancing loss.
 - [ ] Expand the analytical multi-node DeepSpeed ZeRO-3 configurations.
 - [ ] Release pre-trained base model weights.
+
+**Where this is headed:** [docs/future_scope.md](docs/future_scope.md) lays out a
+two-track plan to turn the framework into a published cybersecurity model —
+(1) a resource-efficient path to a small-but-real 1B–3B model on free/low-cost
+compute, and (2) the credible engineering methodology (adapt an open base, build
+a cyber evaluation benchmark, and a defensive dual-use posture).
 
 ## Acknowledgements
 
