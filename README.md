@@ -25,6 +25,13 @@ Several design decisions in VantaLLM are deliberate engineering tradeoffs rather
 - **One prompt builder for training, evaluation, and serving:** prompt parity is treated as a systems invariant because newline drift, double-wrapping, or mismatched chat markers quietly break RAG and checkpoint behavior.
 - **Validation-first distributed bring-up:** topology checks, shard checks, and smoke training are staged before expensive ZeRO or multi-rank runs to reduce time lost to avoidable cluster failures.
 
+## Two Lasting System Rules
+
+These two rules are intended to stay true even as configs, hardware targets, and training scale change:
+
+- **Streaming Data Law:** `read line -> tokenize -> append -> flush shard`. The data pipeline is designed around incremental processing so corpus size can grow from a few gigabytes to multi-terabyte-scale input without requiring the entire dataset to live in RAM at once.
+- **Capability Layering Path:** `Base Model -> SFT -> Early Deploy -> RAG Integration -> RL Alignment -> Agent Integration`. The repo is structured around staged capability layering: first get the base model and serving path stable, then add retrieval, alignment, and higher-level tool use on top of a working core.
+
 ## Overview
 
 VantaLLM is built as an end-to-end LLM engineering project rather than a model file in isolation. The repository covers:
