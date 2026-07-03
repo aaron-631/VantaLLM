@@ -16,6 +16,15 @@ VantaLLM is intended to read like a serious end-to-end LLM systems project, not 
 - **Inference and verification:** local demos, distributed bring-up checks, GPU readiness checks, and test coverage around the active tokenizer/model contract.
 - **Scalable design thinking:** the same codepaths support tiny local debugging, validated A100 20GB reference runs, and larger multi-GPU deployments through config changes rather than branch-specific logic.
 
+## Why These Choices
+
+Several design decisions in VantaLLM are deliberate engineering tradeoffs rather than aesthetic preferences:
+
+- **Packed shard training instead of runtime text parsing:** tokenization and packing happen offline so the training loop can stream flat binary tensors with minimal CPU and disk overhead.
+- **JSON-driven model configs instead of hardcoded runtime sizes:** architecture scale is decoupled from the core code so the same stack can move from tiny validation runs to larger analytical configurations without code forks.
+- **One prompt builder for training, evaluation, and serving:** prompt parity is treated as a systems invariant because newline drift, double-wrapping, or mismatched chat markers quietly break RAG and checkpoint behavior.
+- **Validation-first distributed bring-up:** topology checks, shard checks, and smoke training are staged before expensive ZeRO or multi-rank runs to reduce time lost to avoidable cluster failures.
+
 ## Overview
 
 VantaLLM is built as an end-to-end LLM engineering project rather than a model file in isolation. The repository covers:

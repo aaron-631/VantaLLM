@@ -13,6 +13,15 @@ VantaLLM is built upon three core tenets:
 2. **Scalability:** The architecture naturally scales from minimal single-GPU debugging setups to multi-node DeepSpeed environments via a centralized JSON configuration system.
 3. **Reproducibility:** Training runs, hardware validations, and data processing pipelines are fully deterministic and encapsulated.
 
+## 2.1 Key Engineering Decisions
+
+Several implementation choices are worth calling out because they reflect systems tradeoffs rather than generic "best practices."
+
+- **Offline tokenization and binary sharding:** VantaLLM does not rely on on-the-fly text parsing inside the hot training loop. Raw text is normalized, deduplicated, tokenized, packed, and saved into flat binary shards so GPU training is not gated by JSON parsing or tokenizer throughput.
+- **JSON-based architecture switching:** Model scale is expressed through config files rather than separate model branches. This keeps the transformer implementation stable while letting operators switch between small validation paths and larger analytical profiles.
+- **Shared prompt construction:** Prompt formatting is centralized because prompt drift between training, tests, and inference is a real source of silent regressions, especially once retrieved context and chat markers are introduced.
+- **Validation before orchestration escalation:** The repository is intentionally structured so that distributed backend checks, data contract checks, and tiny training runs happen before DDP or DeepSpeed ZeRO launches.
+
 ## 3. Architecture
 
 VantaLLM implements a modern causal decoder-only Transformer. Key architectural deviations from the standard vanilla Transformer include:
@@ -65,6 +74,14 @@ The FastAPI inference server exposes:
 - `POST /generate/stream` for Server-Sent Event token streaming
 
 Persona routing is implemented as an inference-time conditioning layer over the same model, not as separate checkpoints or branches.
+
+## 6.3 Operational Hardening Lessons
+
+The distributed path in VantaLLM reflects practical failure modes encountered during scaling work:
+
+- **Memory pressure is treated as a first-class design constraint:** BF16, gradient checkpointing, ZeRO partitioning, and paged optimizer usage are part of the documented operator path rather than optional afterthoughts.
+- **Collective symmetry matters in MoE systems:** sparse expert routing can deadlock distributed jobs if ranks diverge in collective participation, so the implementation is designed around rank-safe behavior rather than assuming balanced token flow.
+- **Prompt and data contracts are guarded explicitly:** shard validation, tokenizer contract checks, LFS stub detection, and shared prompt assembly are all there to catch "looks fine but breaks later" failures early.
 
 ## 7. Scaling Methodology and Parameter Rationale
 
