@@ -128,3 +128,14 @@ Abort the run and fall back to a smaller validation step if any of the following
 - Multi-rank jobs stall because ranks consume uneven data or one rank exits early.
 
 Do not patch a live unstable training run. Kill the process group, return to the previous successful stage, and isolate the failure there.
+
+## Known Runtime Unknowns
+
+The repository is intentionally explicit about what still requires empirical hardware validation at larger scales.
+
+- NCCL behavior can still vary across real cluster topologies, drivers, and interconnect layouts.
+- ZeRO-3 behavior for the largest analytical model profiles is structurally prepared but still depends on the target node's RAM, swap, and offload characteristics.
+- Sustained MoE routing skew under long real-throughput runs remains a runtime property, not something that can be fully proven from short local checks.
+- Cross-node scaling efficiency depends on the actual network fabric and storage path, not just on the launcher scripts or JSON configs.
+
+This is normal for systems work. The point of the staged validation path is to collapse these unknowns one layer at a time instead of hiding them.
