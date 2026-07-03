@@ -3,10 +3,10 @@ test_stream.py — VantaLLM Streaming Test
 ==========================================
 Run AFTER the server is up:
 
-    set CUDA_VISIBLE_DEVICES=-1
-    set TINY_MODEL=1
-    set QUANT_MODE=int8
-    python -m inference.server
+    export CUDA_VISIBLE_DEVICES=-1
+    export TINY_MODEL=1
+    export QUANT_MODE=bf16
+    python3 -m vantallm.inference.server
 
 Then in a second terminal:
 

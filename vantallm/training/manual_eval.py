@@ -18,15 +18,23 @@ def evaluate_model():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     tokenizer = load_tokenizer()
     
-    # 1. Load the trained Showcase Tiny Model
+    # 1. Load the trained Showcase Tiny Model if available, otherwise fall back
+    # to a random tiny model so the evaluation script still runs on a clean clone.
     os.environ["TINY_MODEL"] = "1"
-    checkpoint_path = os.path.join(os.path.dirname(__file__), "../../checkpoints/showcase_checkpoint.pt")
-    
-    if not os.path.exists(checkpoint_path):
-        log.error(f"Checkpoint not found at {checkpoint_path}")
-        sys.exit(1)
-        
-    model = load_model(model_path=checkpoint_path, tiny=True).to(device)
+    checkpoint_path = os.environ.get(
+        "MODEL_PATH",
+        os.path.join(os.path.dirname(__file__), "../../checkpoints/showcase_run.pt"),
+    ).strip()
+
+    if checkpoint_path and os.path.exists(checkpoint_path):
+        log.info(f"Loading checkpoint from {checkpoint_path}")
+        model = load_model(model_path=checkpoint_path, tiny=True).to(device)
+    else:
+        log.warning(
+            f"Checkpoint not found at {checkpoint_path or '<unset>'}. "
+            "Running manual evaluation with random tiny weights."
+        )
+        model = load_model(tiny=True).to(device)
     model.eval()
     
     # 2. Define Manual Test Prompts

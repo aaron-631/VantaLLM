@@ -567,6 +567,7 @@ def _find_server_module():
     """
     candidates = [
         # (server_py_path,                                              app_string,            cwd)
+        (os.path.join(PROJECT_ROOT, "vantallm", "inference", "server.py"), "vantallm.inference.server:app", PROJECT_ROOT),
         (os.path.join(PROJECT_ROOT, "inference", "server.py"),  "inference.server:app", PROJECT_ROOT),
         (os.path.join(PROJECT_ROOT, "server.py"),               "server:app",           PROJECT_ROOT),
         (os.path.join(SCRIPT_DIR,   "inference", "server.py"),  "inference.server:app", SCRIPT_DIR),

@@ -4,7 +4,7 @@ VantaLLM is a from-scratch PyTorch framework for training decoder-only language 
 
 The model architecture, training pipeline, and configurations were designed and implemented by Aaron Chakraborty.
 
-> **Note:** Trained model weights are not included in this repository due to size constraints. This repository ships the full training, inference, tokenizer, and distributed-systems stack required to reproduce runs from source.
+> **Note:** Trained model weights are not included in this repository due to size constraints. This repository ships the full training, inference, tokenizer, and distributed-systems stack required to reproduce runs from source. If you cloned the repo without hydrating Git-LFS, checkpoint-backed tests and resume flows will be present in code but the actual `.pt` files will be missing until you run `git lfs pull`.
 
 ## What This Project Demonstrates
 
@@ -47,8 +47,9 @@ The codebase is GPU-agnostic by design: it runs on small local setups for struct
 ## Read First
 
 - [docs/technical_report.md](docs/technical_report.md): architecture, scaling rationale, and distributed design.
-- [docs/gpu_cluster_guide.md](docs/gpu_cluster_guide.md): A100 reference guidance, DeepSpeed behavior, and high-capacity compute notes.
+- [docs/gpu_cluster_guide.md](docs/gpu_cluster_guide.md): A100 reference guidance, RTX PRO 6000 Blackwell notes, DeepSpeed behavior, and high-capacity compute notes.
 - [docs/inference_rag_guide.md](docs/inference_rag_guide.md): prompt parity, RAG routes, serving API, and persona routing.
+- [docs/operational_handoff.md](docs/operational_handoff.md): live continuation path, checkpoint discipline, and operator sequence.
 - [data_pipeline/DATASET_SPEC.md](data_pipeline/DATASET_SPEC.md): slice/shard contract and dataset manufacturing assumptions.
 - [CONTRIBUTING.md](CONTRIBUTING.md): contribution workflow.
 
@@ -95,7 +96,7 @@ git lfs pull
 Notes:
 
 - Install the correct PyTorch wheel separately for your CUDA runtime if you are targeting GPU execution.
-- The training loop currently uses `bitsandbytes.optim.PagedAdamW8bit`; install `bitsandbytes` before running training jobs.
+- If `bitsandbytes` is installed, the trainer will use `bitsandbytes.optim.PagedAdamW8bit`; otherwise it falls back to `torch.optim.AdamW`.
 - Copy `.env.example` to `.env` only if you want a local environment file for your own workflow.
 - Do not use GitHub's "Download ZIP" flow if you expect checkpoint files; it can leave Git-LFS pointers unhydrated.
 - If you plan to move checkpoints between machines, preserve the matching tokenizer assets under `vantallm/tokenizer/cybersec_tokenizer/` and the exact JSON model config used to create the weights.
@@ -249,7 +250,7 @@ These personas are not separate models; they are routing and conditioning modes 
 - On larger GPUs, start from the validated 567M contract and raise per-GPU batch or reduce accumulation only after the baseline path is stable.
 - Change one major variable at a time when debugging distributed runs. Topology, ZeRO stage, batch size, and model config should not all move in the same iteration.
 - For long or expensive distributed jobs, use `tmux` or `screen` so initialization delays do not kill the session.
-- High-capacity GPUs and larger multi-node deployments are documented as an additional capability in [docs/gpu_cluster_guide.md](docs/gpu_cluster_guide.md); they are not a separate codebase or special branch.
+- High-capacity GPUs, including RTX PRO 6000 Blackwell-class nodes, and larger multi-node deployments are documented as an additional capability in [docs/gpu_cluster_guide.md](docs/gpu_cluster_guide.md); they are not a separate codebase or special branch.
 
 ## Documentation Map
 

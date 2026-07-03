@@ -78,12 +78,13 @@ def prepare_distributed_model(model, optimizer, lr_scheduler, is_distributed: bo
             model = torch.nn.parallel.DistributedDataParallel(
                 model, 
                 device_ids=[local_rank],
-                find_unused_parameters=True
+                # Sparse MoE experts can receive no tokens on a rank in a step.
+                find_unused_parameters=True,
             )
         else:
             model = torch.nn.parallel.DistributedDataParallel(
                 model,
-                find_unused_parameters=True
+                find_unused_parameters=True,
             )
         return model, optimizer, lr_scheduler
 

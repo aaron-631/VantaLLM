@@ -107,6 +107,40 @@ class LLMConfig:
     num_persona_experts: int    = 4         # EoE composition strategies
     composite_persona_dim: int  = 512       # composite vector dim → GQA + MoE router
 
+    def __post_init__(self):
+        if self.vocab_size <= 0:
+            raise ValueError("vocab_size must be positive.")
+        if self.d_model <= 0:
+            raise ValueError("d_model must be positive.")
+        if self.max_seq_len <= 0:
+            raise ValueError("max_seq_len must be positive.")
+        if self.num_layers <= 0:
+            raise ValueError("num_layers must be positive.")
+        if self.moe_every_n <= 0:
+            raise ValueError("moe_every_n must be positive.")
+        if self.num_q_heads <= 0 or self.num_kv_heads <= 0:
+            raise ValueError("num_q_heads and num_kv_heads must be positive.")
+        if self.num_q_heads % self.num_kv_heads != 0:
+            raise ValueError(
+                "num_q_heads must be divisible by num_kv_heads for grouped-query attention."
+            )
+        if self.head_dim <= 0 or self.head_dim % 2 != 0:
+            raise ValueError("head_dim must be positive and even for RoPE.")
+        if self.num_experts <= 0:
+            raise ValueError("num_experts must be positive.")
+        if not 1 <= self.top_k_experts <= self.num_experts:
+            raise ValueError("top_k_experts must be in [1, num_experts].")
+        if self.d_ff_dense <= 0 or self.d_ff_moe <= 0:
+            raise ValueError("d_ff_dense and d_ff_moe must be positive.")
+        if self.num_persona_types <= 0 or self.num_persona_experts <= 0:
+            raise ValueError("Persona dimensions must be positive.")
+        if self.persona_embedding_dim <= 0 or self.composite_persona_dim <= 0:
+            raise ValueError("Persona embedding dimensions must be positive.")
+        if not 0.0 <= self.dropout < 1.0:
+            raise ValueError("dropout must be in [0.0, 1.0).")
+        if self.kv_quant_bits <= 0:
+            raise ValueError("kv_quant_bits must be positive.")
+
 
 # ═══════════════════════════════════════════════════════════════════
 # 2.  Quantized Linear Layers
@@ -393,7 +427,7 @@ class GroupedQueryAttention(nn.Module):
       • Flash-Attention-compatible via F.scaled_dot_product_attention
     """
 
-    def __init__(self, config: LLMConfig):
+    def __init__(self, config: LLMConfig, rope: Optional["RotaryEmbedding"] = None):
         super().__init__()
         self.num_q    = config.num_q_heads
         self.num_kv   = config.num_kv_heads
@@ -414,7 +448,14 @@ class GroupedQueryAttention(nn.Module):
             config.composite_persona_dim, self.num_kv * self.head_dim, bias=False
         )
 
-        self.rope       = RotaryEmbedding(self.head_dim, config.max_seq_len, config.rope_theta)
+        # RoPE cos/sin caches depend only on (head_dim, max_seq_len, theta), which
+        # are identical across every layer. Share one instance passed down from the
+        # parent model to avoid duplicating the (max_seq_len × head_dim) FP32 caches
+        # per layer (≈134 MB/layer at 131k context — many GB across a deep model).
+        # Falls back to a private instance if constructed standalone.
+        self.rope       = rope if rope is not None else RotaryEmbedding(
+            self.head_dim, config.max_seq_len, config.rope_theta
+        )
         self.turboquant = TurboQuant(config.kv_quant_bits)
         self.dropout_p  = config.dropout
 
@@ -588,9 +629,12 @@ class TopKRouter(nn.Module):
                 x.shape[0], self._composite_dim, device=x.device, dtype=x.dtype
             )
 
-        # Enforce FP32 for the gating operation to prevent expert collapse
-        router_in = torch.cat([x, persona_ctx_flat], dim=-1)
-        logits    = self.gate(router_in).float()
+        # Enforce FP32 for the gating operation to prevent expert collapse.
+        # The gate weight is pinned to FP32 in `_apply`, so the *input* must be
+        # cast to FP32 as well — otherwise a BF16/FP16 model hits a dtype
+        # mismatch inside the gate matmul (BF16 activations × FP32 weight).
+        router_in = torch.cat([x, persona_ctx_flat], dim=-1).float()
+        logits    = self.gate(router_in)
 
         if self.training and self.jitter > 0:
             noise  = torch.empty_like(logits).uniform_(1 - self.jitter, 1 + self.jitter)
@@ -709,12 +753,13 @@ class TransformerBlock(nn.Module):
         → RMSNorm → Dense SwiGLU | Persona-Aware MoE → + residual
     """
 
-    def __init__(self, config: LLMConfig, use_moe: bool = False):
+    def __init__(self, config: LLMConfig, use_moe: bool = False,
+                 rope: Optional["RotaryEmbedding"] = None):
         super().__init__()
         self.use_moe = use_moe
         self.norm1   = RMSNorm(config.d_model, config.rms_norm_eps)
         self.norm2   = RMSNorm(config.d_model, config.rms_norm_eps)
-        self.attn    = GroupedQueryAttention(config)
+        self.attn    = GroupedQueryAttention(config, rope=rope)
         self.ffn     = MoELayer(config) if use_moe else DenseFFN(config)
 
     def forward(
@@ -801,10 +846,21 @@ class VantaTransformer(nn.Module):
             config.d_model, config.composite_persona_dim, bias=False
         )
 
+        # ── Shared RoPE ─────────────────────────────────────────────────────
+        # One rotary-embedding instance for the whole model. The cos/sin caches
+        # are position-only (independent of layer), so a single shared module
+        # avoids allocating identical (max_seq_len × head_dim) FP32 caches in
+        # every attention layer. Buffers are persistent=False, so this does not
+        # affect checkpoints; `.to()`/`.half()` remain idempotent on the shared
+        # instance.
+        self.rope = RotaryEmbedding(
+            config.head_dim, config.max_seq_len, config.rope_theta
+        )
+
         # ── Transformer layers ──────────────────────────────────────────────
         # MoE on every 2nd block: layers 1, 3, 5, … (odd indices)
         self.layers = nn.ModuleList([
-            TransformerBlock(config, use_moe=(i % config.moe_every_n == 1))
+            TransformerBlock(config, use_moe=(i % config.moe_every_n == 1), rope=self.rope)
             for i in range(config.num_layers)
         ])
 
@@ -1170,6 +1226,16 @@ class PPOTrainer:
 
 def load_weights(model: VantaTransformer, path: str, config: LLMConfig) -> None:
     """Quantization-aware weight loader."""
+    def extract_model_state_dict(checkpoint_data: Any) -> Dict[str, torch.Tensor]:
+        if isinstance(checkpoint_data, dict) and "model" in checkpoint_data:
+            model_state = checkpoint_data["model"]
+            if isinstance(model_state, dict):
+                return model_state
+            raise TypeError("Checkpoint 'model' entry is not a state_dict.")
+        if isinstance(checkpoint_data, dict):
+            return checkpoint_data
+        raise TypeError("Unsupported checkpoint format: expected a state_dict or trainer checkpoint dict.")
+
     mode = config.quantization
 
     if mode in {"fp16", "bf16"}:
@@ -1182,16 +1248,38 @@ def load_weights(model: VantaTransformer, path: str, config: LLMConfig) -> None:
             # weights_only=False: preserve backward-compatible loading for trusted local checkpoints
             state = torch.load(path, map_location="cpu", weights_only=False)
             log.info("  Format: torch checkpoint")
-        model.load_state_dict(state, strict=False)
+        state_dict = extract_model_state_dict(state)
+        load_result = model.load_state_dict(state_dict, strict=False)
+        loaded_keys = set(model.state_dict().keys()) & set(state_dict.keys())
+        if not loaded_keys:
+            raise ValueError(
+                f"Checkpoint at '{path}' did not match any model parameters."
+            )
+        if load_result.missing_keys:
+            log.warning(
+                "  Missing keys during load (%d): %s",
+                len(load_result.missing_keys),
+                load_result.missing_keys[:8],
+            )
+        if load_result.unexpected_keys:
+            log.warning(
+                "  Unexpected keys during load (%d): %s",
+                len(load_result.unexpected_keys),
+                load_result.unexpected_keys[:8],
+            )
         log.info("  FP16 weights loaded.")
 
     elif mode == "int8":
-        log.info(f"INT8 weight loading placeholder (path={path}).")
-        log.info("  → Replace with bitsandbytes loader for real weights.")
+        raise NotImplementedError(
+            "INT8 checkpoint loading is not implemented. "
+            "Use QUANT_MODE=fp16/bf16 for real checkpoints, or add a real INT8 loader."
+        )
 
     elif mode == "int4":
-        log.info(f"INT4 weight loading placeholder (path={path}).")
-        log.info("  → Replace with GPTQ/AWQ loader for real weights.")
+        raise NotImplementedError(
+            "INT4 checkpoint loading is not implemented. "
+            "Use QUANT_MODE=fp16/bf16 for real checkpoints, or add a real INT4 loader."
+        )
 
     else:
         raise ValueError(f"Unknown quantization mode '{mode}'.")
@@ -1295,6 +1383,7 @@ def greedy_generate(
     max_new_tokens: int = 50,
     persona_vector: Optional[torch.Tensor] = None,
     persona_ids:    Optional[torch.Tensor] = None,
+    eos_token_id:   int = 1,
 ) -> torch.Tensor:
     """
     Simple greedy decoding with TurboQuant KV cache.
@@ -1321,7 +1410,7 @@ def greedy_generate(
 
         # Stop when ALL sequences in the batch have generated EOS.
         # .item() on a (B,1) tensor crashes for B>1; use .all() first.
-        if (next_token == 1).all().item(): # EOS_TOKEN_ID is 1
+        if (next_token == eos_token_id).all().item():
             break
 
     return generated

@@ -67,13 +67,32 @@ def run_logit_probe():
 
     tokenizer = load_tokenizer()
 
-    checkpoint_path = os.path.join(os.path.dirname(__file__), "..", "checkpoints", "baseline_verified_parity_hardened.pt")
-    if os.path.exists(checkpoint_path):
+    def single_token_id(text: str) -> int:
+        token_ids = tokenizer.encode(
+            text,
+            return_tensors=None,
+            add_special_tokens=False,
+        )
+        if len(token_ids) != 1:
+            raise ValueError(
+                f"Probe target {text!r} must encode to exactly one token; "
+                f"found {len(token_ids)}."
+            )
+        return token_ids[0]
+
+    checkpoint_path = os.environ.get(
+        "MODEL_PATH",
+        os.path.join(os.path.dirname(__file__), "..", "checkpoints", "baseline_verified_parity_hardened.pt"),
+    ).strip()
+    if checkpoint_path and os.path.exists(checkpoint_path):
         print(f"Loading checkpoint: {checkpoint_path}")
         model = load_model(model_path=checkpoint_path, tiny=True).to(device)
     else:
-        print(f"ERROR: Checkpoint not found at {checkpoint_path}")
-        return
+        print(
+            f"Checkpoint not found at {checkpoint_path or '<unset>'}. "
+            "Running the probe on random tiny weights; treat results as structural only."
+        )
+        model = load_model(tiny=True).to(device)
 
     model.eval()
 
@@ -82,13 +101,13 @@ def run_logit_probe():
             "question": "What color is the sky on Planet Zephyria?",
             "context": "[FACT-001] The sky on Planet Zephyria is purple.",
             "target_token": "purple",
-            "target_id": 4396
+            "target_id": single_token_id("purple")
         },
         {
             "question": "What color is the grass on Planet Zephyria?",
             "context": "[FACT-002] Grass on Planet Zephyria is blue.",
             "target_token": "blue",
-            "target_id": 4833
+            "target_id": single_token_id("blue")
         }
     ]
 

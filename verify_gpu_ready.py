@@ -46,6 +46,18 @@ class ShardedDataset(torch.utils.data.Dataset):
         for p in shard_paths:
             # weights_only=False: preserve backward-compatible loading
             t = torch.load(p, map_location="cpu", weights_only=False)
+            if t.ndim != 2:
+                raise ValueError(
+                    f"Shard '{p}' must have shape [num_sequences, sequence_length]; "
+                    f"found {tuple(t.shape)}."
+                )
+            if self.seq_len is not None and t.shape[1] != self.seq_len:
+                raise ValueError(
+                    f"Shard '{p}' stores {t.shape[1]}-token sequences, but "
+                    f"TRAIN_SEQ_LEN={self.seq_len}. Repack the shards or set "
+                    "TRAIN_SEQ_LEN to the stored sequence length; refusing to "
+                    "silently truncate or pad fixed-width training data."
+                )
             self.lengths.append(len(t))
         self.total_len = sum(self.lengths)
         self.cumulative_lengths = [0] + torch.cumsum(torch.tensor(self.lengths), dim=0).tolist()
@@ -72,14 +84,6 @@ class ShardedDataset(torch.utils.data.Dataset):
             
         local_idx = idx - self.cumulative_lengths[shard_idx]
         ids = self.data[local_idx]
-        
-        # Optional alignment to model's expected sequence length
-        if self.seq_len:
-            if ids.size(0) > self.seq_len:
-                ids = ids[:self.seq_len]
-            elif ids.size(0) < self.seq_len:
-                pad_tensor = torch.zeros(self.seq_len - ids.size(0), dtype=ids.dtype, device=ids.device)
-                ids = torch.cat([ids, pad_tensor])
         
         # Match train.py contract: (input_ids, labels)
         # Defensively cast to long (int64) — nn.Embedding requires int64.
@@ -117,7 +121,7 @@ def validate():
     log.info(f"Found {len(shards)} shards.")
 
     # 1. Verify Dataset Loading
-    dataset = ShardedDataset(shards)
+    dataset = ShardedDataset(shards, seq_len=DEFAULT_TRAIN_SEQ_LEN)
     log.info(f"Total samples across all shards: {len(dataset):,}")
 
     # 2. Verify Sequence Integrity

@@ -121,8 +121,50 @@ Recommended policy:
 3. Escalate ZeRO stage or model config only after the smaller path is stable.
 4. Revalidate NCCL/backend behavior any time node topology changes.
 
+## RTX PRO 6000 Blackwell Notes
+
+RTX PRO 6000 Blackwell class nodes use the same repo, the same launchers, and the same config system as the A100 reference path. The operator workflow is:
+
+1. Validate the unchanged `vanta_567m.json` reference path first.
+2. Confirm `verify_distributed.py`, tiny smoke training, and shard-backed single-node training all behave normally.
+3. Only then raise throughput-oriented knobs such as `BATCH_SIZE`, `GRAD_ACCUM_STEPS`, and worker count.
+
+### Practical Scaling Guidance
+
+Compared with the 20GB A100 baseline path, a 96GB Blackwell-class GPU gives much more room for per-rank batch growth and for disabling memory-saving features only after a stable baseline exists.
+
+| Setting | A100 20GB reference path | RTX PRO 6000 Blackwell direction |
+|---|---|---|
+| Model validation baseline | `configs/vanta_567m.json` | same baseline first |
+| Precision | `QUANT_MODE=bf16` | keep `bf16` as the first-line path |
+| `BATCH_SIZE` | conservative default | raise after baseline is stable |
+| `GRAD_ACCUM_STEPS` | used to preserve effective batch | can often be reduced as VRAM headroom grows |
+| Gradient checkpointing | useful pressure-relief knob | optional only after memory headroom is confirmed |
+| ZeRO stage | start with ZeRO-1/ZeRO-2 as needed | escalate only if larger configs demand it |
+
+Important implementation note: the current public repo exposes `bf16` and `fp16` as the documented real precision modes. Do not assume a production-ready FP4 path from the experimental notes; Blackwell hardware may support more aggressive precision strategies, but this repository's current operator contract is still BF16/FP16 plus ZeRO partitioning.
+
+### Known Blackwell Bring-Up Observations
+
+During earlier large-model bring-up work, kernel messages such as `kbifInitLtr_GB202: LTR is disabled` were treated as benign Blackwell driver quirks when they appeared without companion signs of actual failure such as:
+
+- OOM-killer entries in `dmesg`
+- NCCL initialisation failures
+- rank exits during launcher startup
+- monotonic host-memory growth ending in process death
+
+Treat those messages as a signal to keep observing the run, not as standalone proof that the launch failed.
+
+### Blackwell Operator Policy
+
+- Keep the first Blackwell run bounded with a tiny or short-step validation before long jobs.
+- Save `nvidia-smi`, `dmesg`, and the exact env/config used for the first stable run on any new node image.
+- Increase one major variable at a time. Do not simultaneously change GPU type, batch size, ZeRO stage, and model config.
+- If throughput is healthy and memory is stable, scale batch before scaling architecture.
+- If you move beyond the 567M path onto the analytical larger configs, revalidate swap, host RAM, and DeepSpeed offload assumptions explicitly.
+
 ### Scaling to High-Capacity Compute (Big GPUs)
-When scaling up to massive architectures (e.g., next-generation compute nodes with significantly larger VRAM pools):
+When scaling up to massive architectures on Blackwell, H100, or later high-memory environments:
 - The distributed topology assumptions inherently scale forward. Ensure you revalidate your kernel versions, NCCL backend, and micro-batch settings for the target cluster architecture.
 - For immense parameter expansions, rely on ZeRO-3 parameter/optimizer partitioning. The package layout and dynamic JSON configuration (e.g., decoupling dimensions and accumulation steps) are designed to remain forward-compatible for clusters handling these advanced workloads without requiring core logic modifications.
 - The forward-compatibility point is architectural, not marketing language: larger GPUs should not require a separate codebase, only a revalidated config, topology, and launch plan.

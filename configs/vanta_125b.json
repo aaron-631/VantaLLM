@@ -1,7 +1,7 @@
 {
   "vocab_size": 151003,
   "d_model": 4096,
-  "max_seq_len": 4096,
+  "max_seq_len": 131072,
   "num_layers": 94,
   "moe_every_n": 2,
   "num_q_heads": 32,

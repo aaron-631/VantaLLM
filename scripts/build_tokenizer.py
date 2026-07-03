@@ -35,9 +35,10 @@ log = logging.getLogger(__name__)
 
 
 # ── Config ────────────────────────────────────────────────────────────────────
-VOCAB_SIZE       = 151_000       # must match LLMConfig in transformer.py
+BASE_VOCAB_SIZE  = 151_000       # checkpoint-compatible BPE vocabulary
+VOCAB_SIZE       = 151_003       # base vocabulary + three appended chat tokens
 MIN_FREQUENCY    = 2             # ignore tokens appearing less than 2 times
-OUTPUT_DIR       = "tokenizer/cybersec_tokenizer"
+OUTPUT_DIR       = "vantallm/tokenizer/cybersec_tokenizer"
 CLEAN_DATA_FILE  = "./cybersec_data.txt"
 # Using multiple datasets to reach 151,000 vocab size.
 # Revisions are pinned for tokenizer-build reproducibility.
@@ -196,7 +197,8 @@ def train_tokenizer(data_file: str):
     Returns the trained tokenizer.
     """
     log.info("Step 3 — Training custom BPE tokenizer...")
-    log.info(f"  Vocab size  : {VOCAB_SIZE:,}")
+    log.info(f"  Base vocab size: {BASE_VOCAB_SIZE:,}")
+    log.info(f"  Final vocab size: {VOCAB_SIZE:,}")
     log.info(f"  Min frequency: {MIN_FREQUENCY}")
     log.info("  This may take 20-40 minutes on a laptop CPU — please wait...")
 
@@ -217,21 +219,30 @@ def train_tokenizer(data_file: str):
         "<bos>",    # beginning of sequence
         "<unk>",    # unknown token
         "<mask>",   # mask token (for training)
-        # Cybersecurity special tokens
-        "<CVE>",    # CVE identifier marker
-        "<CWE>",    # CWE identifier marker
-        "<EXPLOIT>",# exploit marker
-        "<VULN>",   # vulnerability marker
+        # Preserve the IDs used by existing shards and checkpoints.
+        "<CVE>",
+        "<CWE>",
+        "<EXPLOIT>",
+        "<VULN>",
     ]
 
     # Train the tokenizer
     tokenizer.train(
         files=[data_file],
-        vocab_size=VOCAB_SIZE,
+        vocab_size=BASE_VOCAB_SIZE,
         min_frequency=MIN_FREQUENCY,
         special_tokens=special_tokens,
         show_progress=True,
     )
+
+    # Existing model assets reserve the final three IDs for chat markers.
+    tokenizer.add_special_tokens(["<|user|>", "<|assistant|>", "<|system|>"])
+    actual_vocab_size = tokenizer.get_vocab_size()
+    if actual_vocab_size != VOCAB_SIZE:
+        raise RuntimeError(
+            f"Tokenizer construction produced {actual_vocab_size} tokens; "
+            f"expected {VOCAB_SIZE}."
+        )
 
     log.info("Step 3 complete — BPE tokenizer trained successfully ✓")
     return tokenizer
@@ -264,6 +275,9 @@ def save_tokenizer(tokenizer) -> str:
             "bos_token"  : "<bos>",
             "unk_token"  : "<unk>",
             "mask_token" : "<mask>",
+            "user_token" : "<|user|>",
+            "assistant_token": "<|assistant|>",
+            "system_token": "<|system|>",
         }
     }
 

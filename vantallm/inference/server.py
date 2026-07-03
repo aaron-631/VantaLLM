@@ -37,7 +37,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from vantallm.model.transformer import VantaTransformer, LLMConfig
-from vantallm.tokenizer.tokenizer import load_tokenizer as load_custom_tokenizer
+from vantallm.tokenizer.tokenizer import load_tokenizer as load_custom_tokenizer, MockTokenizer as CanonicalMockTokenizer
 
 logging.basicConfig(
     level=logging.INFO,
@@ -196,44 +196,12 @@ def trim_output(ids: torch.Tensor, pad_id: int, eos_id: int) -> torch.Tensor:
 # 4. Tokenizer
 # ==============================================================================
 
-class MockTokenizer:
-    """
-    Character-level stub for offline testing only.
-    Set TOKENIZER_PATH to use a real tokenizer in production.
-    """
-    vocab_size   = 151_003
-    eos_token_id = 1
-    pad_token_id = 0
-
-    def encode(self, text: str, return_tensors: str = "pt") -> torch.Tensor:
-        if len(text) > 1024:
-            log.warning(
-                f"MockTokenizer: input is {len(text)} chars, truncating to 1024. "
-                "Set TOKENIZER_PATH for production."
-            )
-        ids = [ord(c) % self.vocab_size for c in text[:1024]]
-        return torch.tensor([ids], dtype=torch.long)
-
-    def decode(self, token_ids: torch.Tensor) -> str:
-        if token_ids.numel() == 0:
-            return ""
-        if token_ids.numel() == 1:
-            return chr(token_ids.item() % 128) if token_ids.item() > 32 else " "
-        return f"[MOCK OUTPUT — {token_ids.shape[-1]} tokens generated]"
-
-    def __len__(self) -> int:
-        return self.vocab_size
-
-
 def load_tokenizer():
     tok = load_custom_tokenizer()
-    if isinstance(tok, MockTokenizer):
-        log.warning("Using server-local MockTokenizer fallback (dev/test only).")
+    if isinstance(tok, CanonicalMockTokenizer):
+        log.warning("Using fallback MockTokenizer (dev/test only).")
     else:
-        log.info(
-            f"Loaded custom tokenizer from "
-            f"{os.environ.get('TOKENIZER_PATH', 'cybersec_tokenizer/').strip() or 'cybersec_tokenizer/'}"
-        )
+        log.info(f"Loaded custom tokenizer from {os.environ.get('TOKENIZER_PATH', 'cybersec_tokenizer/')}")
     return tok
 
 
@@ -640,6 +608,12 @@ app_state = AppState()
 
 
 def load_model() -> VantaTransformer:
+    def _extract_model_state_dict(checkpoint_data: Dict[str, Any]) -> Dict[str, torch.Tensor]:
+        model_state = checkpoint_data.get("model")
+        if isinstance(model_state, dict):
+            return model_state
+        return checkpoint_data
+
     def _env_flag(name: str) -> bool:
         value = os.environ.get(name)
         if value is None:
@@ -668,7 +642,7 @@ def load_model() -> VantaTransformer:
         cfg = LLMConfig(
             vocab_size=151_003,
             d_model=256,
-            max_seq_len=2048,
+            max_seq_len=512,
             num_layers=4,
             num_q_heads=8,
             num_kv_heads=2,
@@ -710,7 +684,8 @@ def load_model() -> VantaTransformer:
 
     if model_path and os.path.exists(model_path):
         # weights_only=False: preserve backward-compatible loading for trusted local checkpoints
-        state_dict = torch.load(model_path, map_location="cpu", weights_only=False)
+        checkpoint_data = torch.load(model_path, map_location="cpu", weights_only=False)
+        state_dict = _extract_model_state_dict(checkpoint_data)
         
         # Manual fix for vocab size mismatch (151,000 vs 151,003)
         for key in ["token_embed.weight", "lm_head.weight"]:
@@ -968,7 +943,7 @@ async def generate_stream(req: GenerateRequest):
 
 if __name__ == "__main__":
     uvicorn.run(
-        "inference.server:app", # ✅ THIS MATCHES YOUR PACKAGE PATH
+        "vantallm.inference.server:app",
         host=os.environ.get("HOST", "0.0.0.0"),
         port=int(os.environ.get("PORT", 8000)),
     )

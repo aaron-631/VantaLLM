@@ -13,6 +13,6 @@
   "moe_every_n": 2,
   "quantization": "bf16",
   "composite_persona_dim": 256,
-  "moe_aux_loss_coeff": 0.3,
+  "moe_aux_loss_coeff": 0.01,
   "gradient_checkpointing": true
 }

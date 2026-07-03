@@ -50,11 +50,9 @@ logging.basicConfig(
 )
 log = logging.getLogger("trainer")
 
-# Default training sequence length used for training/validation workflows.
-# Capped by the model's architectural max_seq_len at runtime via min().
-# Set to match the full capability of the 125B config (4096 tokens).
-# Smaller configs (e.g. vanta_567m with max_seq_len=2048) are safely capped.
-DEFAULT_TRAIN_SEQ_LEN = 4096
+# The repository's tokenizer pipeline packs fixed 2,048-token sequences.
+# TRAIN_SEQ_LEN may be raised only when the input shards were repacked to match.
+DEFAULT_TRAIN_SEQ_LEN = 2048
 
 # --- Distributed Environment Setup via Helpers ---
 is_distributed, world_size, rank, local_rank = setup_distributed()
@@ -191,11 +189,13 @@ def sanity_check_loop():
     # Using 42 for Rank 0 ensures identical reproduction to earlier local logs.
     set_deterministic_seed(42, rank)
 
-    default_checkpoint_path = os.path.join(
-        os.path.dirname(__file__), "../../checkpoints/baseline_verified_parity_hardened.pt"
-    )
-    if os.environ.get("MODEL_CONFIG", "").strip():
-        default_checkpoint_path = ""
+    default_checkpoint_path = ""
+    if not os.environ.get("MODEL_CONFIG", "").strip():
+        candidate_checkpoint = os.path.join(
+            os.path.dirname(__file__), "../../checkpoints/baseline_verified_parity_hardened.pt"
+        )
+        if os.path.exists(candidate_checkpoint):
+            default_checkpoint_path = candidate_checkpoint
     model_path_env = os.environ.get("MODEL_PATH")
     checkpoint_path = os.environ.get("MODEL_PATH", default_checkpoint_path).strip()
     explicit_resume_path = model_path_env is not None and model_path_env.strip() != ""
@@ -249,11 +249,16 @@ def sanity_check_loop():
             log_info(f"MIG Partition : {'Detected' if 'MIG' in gpu_name else 'Standard'}")
         log_info(f"-----------------------------------")
 
-    # Resolve runtime sequence length based on model capability
-    effective_seq_len = min(DEFAULT_TRAIN_SEQ_LEN, model.config.max_seq_len)
-    if effective_seq_len < DEFAULT_TRAIN_SEQ_LEN:
+    # Resolve runtime sequence length independently from architectural context.
+    # The default matches data_pipeline/tokenize_data.py's fixed shard width.
+    requested_seq_len = int(os.environ.get("TRAIN_SEQ_LEN", DEFAULT_TRAIN_SEQ_LEN))
+    if requested_seq_len <= 0:
+        log_error("TRAIN_SEQ_LEN must be a positive integer.")
+        return False
+    effective_seq_len = min(requested_seq_len, model.config.max_seq_len)
+    if effective_seq_len < requested_seq_len:
         log_warning(
-            f"Requested training seq_len={DEFAULT_TRAIN_SEQ_LEN} exceeds "
+            f"Requested training seq_len={requested_seq_len} exceeds "
             f"model capability={model.config.max_seq_len}. "
             f"Using capped effective_seq_len={effective_seq_len} for validation."
         )
@@ -327,8 +332,13 @@ def sanity_check_loop():
 
     # Dynamic LR assigned via Environment Variables
     peak_lr = float(os.environ.get("LR_PEAK", "3e-6"))
-    import bitsandbytes as bnb
-    optimizer = bnb.optim.PagedAdamW8bit(model.parameters(), lr=peak_lr, weight_decay=0.01)
+    try:
+        import bitsandbytes as bnb
+        optimizer = bnb.optim.PagedAdamW8bit(model.parameters(), lr=peak_lr, weight_decay=0.01)
+        log_info("Using bitsandbytes PagedAdamW8bit optimizer.")
+    except ImportError:
+        log_warning("bitsandbytes not available. Falling back to torch.optim.AdamW.")
+        optimizer = torch.optim.AdamW(model.parameters(), lr=peak_lr, weight_decay=0.01)
 
     if _saved_optimizer_state is not None:
         try:
@@ -358,32 +368,39 @@ def sanity_check_loop():
     else:
         base_optimizer = optimizer
 
-    # LR warmup + cosine decay — bound to the FINAL optimizer returned above
-    from torch.optim.lr_scheduler import LinearLR, CosineAnnealingLR, SequentialLR
-    _warmup_steps = int(os.environ.get("LR_WARMUP_STEPS", max(1, min(200, num_steps // 10))))
-    _cosine_steps = max(1, num_steps - _warmup_steps)
-    _warmup_sched  = LinearLR(base_optimizer, start_factor=0.1, end_factor=1.0, total_iters=_warmup_steps)
-    _cosine_sched  = CosineAnnealingLR(base_optimizer, T_max=_cosine_steps, eta_min=3e-7)
-    lr_scheduler   = SequentialLR(base_optimizer, schedulers=[_warmup_sched, _cosine_sched], milestones=[_warmup_steps])
-    log_info(f"LR schedule: warmup {_warmup_steps} steps → cosine decay to 3e-7 over {_cosine_steps} steps")
-
-    # Fast-forward scheduler to match resumed checkpoint step.
-    if start_step > 0:
-        log_info(f"Fast-forwarding LR scheduler to step {start_step}...")
-        for _ in range(start_step):
-            lr_scheduler.step()
-        log_info(f"LR scheduler aligned. Current LR: {lr_scheduler.get_last_lr()}")
-
     # If resuming a DeepSpeed checkpoint directory, load it now that DeepSpeed is initialized
+    # NOTE: This MUST happen BEFORE LR scheduler creation so start_step is correct.
     if is_deepspeed_engine(model) and checkpoint_path and os.path.isdir(checkpoint_path):
         log_info(f"Resuming DeepSpeed checkpoint from: {checkpoint_path}")
         load_dir = os.path.dirname(checkpoint_path)
         tag = os.path.basename(checkpoint_path)
-        # Extract step from client state natively
         _, client_state = model.load_checkpoint(load_dir, tag=tag)
         if client_state:
             start_step = client_state.get("step", 0)
             log_info(f"Restored DeepSpeed start_step: {start_step}")
+
+    # LR warmup + cosine decay — bound to the FINAL optimizer returned above.
+    # For DeepSpeed, num_steps counts micro-batches but scheduler steps only
+    # fire at accumulation boundaries, so we divide by DS grad_accum_steps.
+    from torch.optim.lr_scheduler import LinearLR, CosineAnnealingLR, SequentialLR
+    _ds_accum = 1
+    if is_deepspeed_engine(model):
+        _ds_accum = model.gradient_accumulation_steps()
+    _optimizer_steps = max(1, num_steps // _ds_accum)
+    _warmup_steps = int(os.environ.get("LR_WARMUP_STEPS", max(1, min(200, _optimizer_steps // 10))))
+    _cosine_steps = max(1, _optimizer_steps - _warmup_steps)
+    _warmup_sched  = LinearLR(base_optimizer, start_factor=0.1, end_factor=1.0, total_iters=_warmup_steps)
+    _cosine_sched  = CosineAnnealingLR(base_optimizer, T_max=_cosine_steps, eta_min=3e-7)
+    lr_scheduler   = SequentialLR(base_optimizer, schedulers=[_warmup_sched, _cosine_sched], milestones=[_warmup_steps])
+    log_info(f"LR schedule: warmup {_warmup_steps} steps → cosine decay to 3e-7 over {_cosine_steps} optimizer steps (DS accum={_ds_accum})")
+
+    # Fast-forward scheduler to match resumed checkpoint step.
+    if start_step > 0:
+        _resume_optimizer_steps = start_step // _ds_accum
+        log_info(f"Fast-forwarding LR scheduler to optimizer step {_resume_optimizer_steps}...")
+        for _ in range(_resume_optimizer_steps):
+            lr_scheduler.step()
+        log_info(f"LR scheduler aligned. Current LR: {lr_scheduler.get_last_lr()}")
 
     # Optimization & Hardware
     batch_size = int(os.environ.get("BATCH_SIZE", 2))
@@ -396,7 +413,8 @@ def sanity_check_loop():
             "Set `gradient_accumulation_steps` in the DeepSpeed config instead."
         )
 
-    global_batch_size = batch_size * world_size * grad_accum_steps
+    _effective_accum = model.gradient_accumulation_steps() if is_deepspeed_engine(model) else grad_accum_steps
+    global_batch_size = batch_size * world_size * _effective_accum
 
     log_info(f"--- Distributed Scaling Info ---")
     log_info(f"Local Batch Size: {batch_size}")
@@ -410,11 +428,27 @@ def sanity_check_loop():
     vocab_size = raw_model.config.vocab_size
     num_persona = raw_model.config.num_persona_types
 
+    # Pretraining shards carry no persona labels, so every token is conditioned on
+    # a single fixed "neutral" persona (id 0 by default). This is intentional:
+    # persona conditioning is applied later at SFT/inference, not during base
+    # pretraining. Exposed via env so a persona-labelled run can override it;
+    # must stay within [0, num_persona_types).
+    pretrain_persona_id = int(os.environ.get("PRETRAIN_PERSONA_ID", "0"))
+    if not 0 <= pretrain_persona_id < num_persona:
+        log_error(
+            f"PRETRAIN_PERSONA_ID={pretrain_persona_id} out of range "
+            f"[0, {num_persona})."
+        )
+        return False
+
     # --- Dataset Selection ---
     data_mode = os.environ.get("DATA_MODE", "showcase").lower()
 
     if data_mode == "showcase":
-        data_path = os.environ.get("DATA_PATH", os.path.join(os.path.dirname(__file__), "../../data_pipeline/showcase_slice.jsonl"))
+        data_path = os.environ.get(
+            "DATA_PATH",
+            os.path.join(os.path.dirname(__file__), "../../data_pipeline/rag_synthetic_slice_v2_fixed.jsonl"),
+        )
         if not os.path.exists(data_path):
             log_error(f"Data file not found: {data_path}")
             return False
@@ -473,7 +507,8 @@ def sanity_check_loop():
     prefetch_factor = int(os.environ.get("PREFETCH_FACTOR", 2)) if num_workers > 0 else None
 
     # Final Dataloaders
-    dataloader = DataLoader(dataset, batch_size=batch_size, sampler=sampler, shuffle=False, num_workers=num_workers, pin_memory=pin_memory, prefetch_factor=prefetch_factor, drop_last=False)
+    shuffle_data = (sampler is None)  # Shuffle when not using DistributedSampler
+    dataloader = DataLoader(dataset, batch_size=batch_size, sampler=sampler, shuffle=shuffle_data, num_workers=num_workers, pin_memory=pin_memory, prefetch_factor=prefetch_factor, drop_last=False)
     
     val_loader = None
     if val_dataset:
@@ -520,7 +555,7 @@ def sanity_check_loop():
 
         input_ids = batch_ids.to(device, dtype=torch.long, non_blocking=True)
         labels    = batch_labels.to(device, dtype=torch.long, non_blocking=True)
-        p_ids     = torch.zeros((input_ids.size(0), num_persona), dtype=torch.long, device=device)
+        p_ids     = torch.full((input_ids.size(0), num_persona), pretrain_persona_id, dtype=torch.long, device=device)
 
         # 1. Forward
         out = model(input_ids, persona_ids=p_ids, labels=labels)
@@ -598,7 +633,7 @@ def sanity_check_loop():
             with torch.no_grad():
                 for v_ids, v_labels in val_loader:
                     v_ids, v_labels = v_ids.to(device, dtype=torch.long, non_blocking=True), v_labels.to(device, dtype=torch.long, non_blocking=True)
-                    v_p_ids = torch.zeros((v_ids.size(0), num_persona), dtype=torch.long, device=device)
+                    v_p_ids = torch.full((v_ids.size(0), num_persona), pretrain_persona_id, dtype=torch.long, device=device)
                     v_out = model(v_ids, persona_ids=v_p_ids, labels=v_labels)
                     val_loss += v_out["loss"].item()
                     val_steps += 1
@@ -641,4 +676,8 @@ if __name__ == "__main__":
     finally:
         cleanup_distributed()
     if rank == 0:
-        print("\n✅ Showcase training successful." if success else "\n❌ Showcase training FAILED.")
+        if success:
+            print("\n✅ Showcase training successful.")
+        else:
+            print("\n❌ Showcase training FAILED.")
+            sys.exit(1)
