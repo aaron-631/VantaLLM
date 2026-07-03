@@ -77,6 +77,18 @@ bash vantallm/distributed/launch_ddp.sh 4
 bash vantallm/distributed/launch_deepspeed.sh 4
 ```
 
+**Default ZeRO stage:** `launch_deepspeed.sh` defaults to **ZeRO-2** (`zero2.json`)
+so the 567M reference bring-up runs on a single A100-class GPU without CPU
+offload. Switch to **ZeRO-3** (`zero3.json`, which offloads optimizer+params to
+CPU) only for the larger analytical configs, by passing it explicitly:
+
+```bash
+bash vantallm/distributed/launch_deepspeed.sh 8 vantallm/distributed/deepspeed_configs/zero3.json
+```
+
+Rule of thumb from the reference memory profiling: ≲4B parameters → ZeRO-2;
+≳30B parameters → ZeRO-3 with CPU offload.
+
 ## NCCL Configuration
 When running on distributed clusters, ensure NCCL is configured correctly to prevent deadlocks:
 - Set `NCCL_DEBUG=INFO` for verbosity during initial testing.

@@ -100,3 +100,64 @@ To prove the framework's mathematical readiness for hyper-scale scenarios, two t
 - **235B Configuration (`vanta_235b.json`)**
 
 **Important Disclaimer:** The 125B and 235B configurations are analytical projections. They define the dimensional hyperparameters (layers, heads, embedding dimensions) required for these models but **have not been experimentally validated or trained to convergence**. They exist strictly as templates for researchers looking to deploy VantaLLM on supercomputing clusters.
+
+## 8. Known Limitations & Architectural Trade-offs
+
+These are deliberate boundaries of the current implementation, documented so that
+they are read as engineering choices rather than oversights. None of them block
+the 567M reference path; each is a scoped decision with a known upgrade route.
+
+### 8.1 Persona conditioning: training and inference use different pathways
+
+Persona conditioning is **not** wired identically across training and inference,
+and this is a genuine (disclosed, not yet resolved) limitation:
+
+- **Training** drives persona through a learnable stack —
+  `persona_store` (`PersonaEmbeddingStore`) → `persona_router`
+  (`ExpertOfExpertsCompositionRouter`) → `persona_to_hidden` — injected at the
+  embedding layer. During pretraining the persona IDs are held constant, so this
+  stack receives gradient but learns only a fixed persona.
+- **Inference** (`server.py`) instead supplies an L2-normalized last-token hidden
+  vector and projects it through `persona_vec_to_composite`. That projection is
+  **randomly initialized and receives no gradient on the training path** (it is
+  the sole unused parameter under DDP's `find_unused_parameters=True`).
+
+The consequence is a train/serve representation mismatch: the persona signal the
+model was optimized against is not the same signal it is conditioned on at serve
+time. This does not affect base language-modeling quality, but persona steering
+at inference is effectively untrained. Unifying the two — so the inference
+projection is learned during training — requires a retraining run and is left as
+future work rather than shipped as an unvalidated change.
+
+### 8.2 Deliberate scope boundaries (not defects)
+
+The following are intentional simplifications appropriate for a single-node,
+from-scratch reference; each is labeled in-code:
+
+- **MoE dispatch is a Python per-expert loop** (dense-in-graph, sparse-in-compute).
+  Every expert runs on every rank and processes only its routed tokens via
+  `index_add_`. This is DDP/ZeRO-safe and correct, but does **not** implement
+  expert-parallelism, all-to-all, or grouped-GEMM, so it is not throughput-optimal
+  at many-GPU scale. Trade-off chosen for correctness and portability over peak
+  MoE efficiency.
+- **`Int8Linear` / `Int4Linear` are experimental scaffolds.** They dequantize to
+  float for compute and do **not** yet deliver VRAM reduction; they exist to
+  exercise the quantization interface, and are labeled as such in-code.
+- **`TurboQuant` INT8 KV-cache** decompresses through FP32 before BF16 compute.
+  Reconstruction error is within spec (MAE ≈ 0.004), but it is a lossy cache, not
+  a lossless one.
+- **The 128K `max_seq_len` is a capability ceiling, not a trained context length.**
+  The validated bring-up sequence length is 2048; long-context behavior at the
+  nominal maximum has not been trained or evaluated.
+- **Test surface.** The pytest-native smoke suite is intentionally small (8 tests);
+  the larger script-style suites are driver programs run directly (see
+  `tests/conftest.py`), not pytest-collected.
+
+### 8.3 Not validated at scale on this hardware
+
+Two items are architecturally in place but only provable on a real multi-GPU run,
+and are therefore **not** claimed as validated: the bitsandbytes `PagedAdamW8bit`
+optimizer under ZeRO-3 CPU offload, and the embedding/LM-head weight tie
+constructed inside `deepspeed.zero.Init()` surviving ZeRO-3 parameter
+partitioning. Both are exercised by the 567M path's configuration but require a
+GPU session to confirm end-to-end.

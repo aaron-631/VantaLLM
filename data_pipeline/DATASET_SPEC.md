@@ -2,6 +2,9 @@
 
 This document defines the data contract used by the VantaLLM pipeline. It is not a claim that the full target corpus is already packaged in this repository; it describes the intended manufacturing layout and the invariants that the pipeline tools enforce.
 
+> For the **sources, approximate mixture, and licensing status** of the example
+> corpus, see [`DATA_PROVENANCE.md`](./DATA_PROVENANCE.md).
+
 ## Overview
 
 VantaLLM is designed to support large-scale decoder-only pretraining with a mix of general-language, code, and security-relevant text. The repository focuses on the engineering path required to ingest, normalize, tokenize, deduplicate, and shard those corpora reproducibly.

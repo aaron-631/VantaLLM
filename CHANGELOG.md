@@ -7,6 +7,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **`launch_deepspeed.sh` defaults to ZeRO-2 instead of ZeRO-3 (audit Finding
+  F22).** The launcher previously defaulted to `zero3.json`, which offloads
+  optimizer+params to CPU and can OOM/stall a single-GPU bring-up of the 567M
+  reference. It now defaults to `zero2.json` (fits an A100-class card without
+  offload); ZeRO-3 remains available by passing the config explicitly. Documented
+  the stage choice and a ≲4B→ZeRO-2 / ≳30B→ZeRO-3 rule of thumb in
+  `docs/gpu_cluster_guide.md`.
+
+### Documented (disclosed, not code-changed)
+- **Persona train/serve pathway mismatch (audit Finding F14).** Added
+  `docs/technical_report.md` §8.1 describing that training conditions persona via
+  the learnable `persona_store → persona_router → persona_to_hidden` stack while
+  inference projects an L2-normed last-token vector through the un-gradient'd
+  `persona_vec_to_composite`. Disclosed as a known limitation (fixing it needs a
+  retrain) rather than shipped as an unvalidated change.
+- **Known Limitations & Architectural Trade-offs (audit Findings F03/F04/F05/
+  F15/F17).** Added `docs/technical_report.md` §8.2–§8.3 so deliberate boundaries
+  — Python MoE dispatch loop (no expert-parallel/grouped-GEMM), experimental
+  Int8/Int4 mock linears, lossy TurboQuant INT8 KV-cache, 128K capability ceiling
+  vs 2048 trained length, small pytest surface, and the GPU-only-unvalidated
+  bnb/ZeRO-3 items — read as choices rather than misses.
+- **Data provenance manifest (audit Finding F25).** Added
+  `data_pipeline/DATA_PROVENANCE.md` listing the four public HuggingFace sources
+  the example pipeline pulls, an approximate record-count mixture (~45% general
+  chat / ~27% CVE / ~18% cyber corpus / ~11% code), and an explicit
+  operator-responsibility note on licensing plus what was **not** done (license
+  review, revision pinning/checksums, contamination screening). Cross-linked from
+  `DATASET_SPEC.md`. Kept lightweight by design — provenance + honesty, not
+  production data-governance infra.
+
 ### Added
 - **Packaging via `pyproject.toml` (audit Finding F23).** The repo previously had
   no `pyproject.toml`/`setup.py`, so it ran only from a checkout and was not
