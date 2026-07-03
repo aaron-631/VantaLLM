@@ -59,12 +59,32 @@ def prepare_distributed_model(model, optimizer, lr_scheduler, is_distributed: bo
         if config_path and not os.path.exists(config_path):
             raise RuntimeError(f"DeepSpeed config not found: {config_path}")
 
+        # Load the config as a dict so batch sizing follows the same env vars the
+        # rest of the trainer uses, instead of being silently pinned by the JSON
+        # (Finding F01: hardcoded train_micro_batch_size_per_gpu overrode BATCH_SIZE).
+        ds_config = config_path
+        if config_path:
+            import json
+            with open(config_path) as _f:
+                ds_config = json.load(_f)
+            _bs = os.environ.get("BATCH_SIZE")
+            if _bs:
+                ds_config["train_micro_batch_size_per_gpu"] = int(_bs)
+            _ga = os.environ.get("DS_GRAD_ACCUM_STEPS")
+            if _ga:
+                ds_config["gradient_accumulation_steps"] = int(_ga)
+            log.info(
+                "DeepSpeed batch config: micro_batch=%s, grad_accum=%s",
+                ds_config.get("train_micro_batch_size_per_gpu"),
+                ds_config.get("gradient_accumulation_steps"),
+            )
+
         model, optimizer_ds, _, lr_scheduler = deepspeed.initialize(
-            model=model, 
+            model=model,
             model_parameters=model.parameters(),
             optimizer=optimizer,
             lr_scheduler=lr_scheduler,
-            config=config_path
+            config=ds_config
         )
         optimizer = optimizer_ds
         return model, optimizer, lr_scheduler

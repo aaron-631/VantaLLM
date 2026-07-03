@@ -5,6 +5,7 @@ Verifies shard integrity and training loop compatibility.
 """
 
 import os
+import bisect
 import torch
 import logging
 from torch.utils.data import DataLoader
@@ -37,15 +38,22 @@ class ShardedDataset(torch.utils.data.Dataset):
                 )
             
         self.shard_paths = shard_paths
-        self.current_shard_idx = -1
-        self.data = None
         self.seq_len = seq_len
-        
-        # Calculate total length without loading everything
+
+        # Memory-map every shard once. mmap=True keeps the tensor storage backed
+        # by the file on disk instead of copying it into RAM, so:
+        #   * __init__ no longer fully materialises every shard just to read its
+        #     length (it only touches metadata), and
+        #   * __getitem__ can random-access any row of any shard without ever
+        #     re-loading a whole shard from disk on a boundary cross.
+        # This is what makes shuffle=True across shards cheap instead of thrashing
+        # (Finding F08). Handles are held open for the dataset's lifetime; the OS
+        # page cache manages resident memory.
+        self._shards = []
         self.lengths = []
         for p in shard_paths:
             # weights_only=False: preserve backward-compatible loading
-            t = torch.load(p, map_location="cpu", weights_only=False)
+            t = torch.load(p, map_location="cpu", weights_only=False, mmap=True)
             if t.ndim != 2:
                 raise ValueError(
                     f"Shard '{p}' must have shape [num_sequences, sequence_length]; "
@@ -58,6 +66,7 @@ class ShardedDataset(torch.utils.data.Dataset):
                     "TRAIN_SEQ_LEN to the stored sequence length; refusing to "
                     "silently truncate or pad fixed-width training data."
                 )
+            self._shards.append(t)
             self.lengths.append(len(t))
         self.total_len = sum(self.lengths)
         self.cumulative_lengths = [0] + torch.cumsum(torch.tensor(self.lengths), dim=0).tolist()
@@ -66,24 +75,18 @@ class ShardedDataset(torch.utils.data.Dataset):
         return self.total_len
 
     def __getitem__(self, idx):
-        # Find which shard this index belongs to
-        shard_idx = -1
-        for i in range(len(self.cumulative_lengths) - 1):
-            if idx >= self.cumulative_lengths[i] and idx < self.cumulative_lengths[i+1]:
-                shard_idx = i
-                break
-        
-        if shard_idx == -1:
+        if idx < 0:
+            idx += self.total_len
+        if idx < 0 or idx >= self.total_len:
             raise IndexError("Index out of bounds")
-            
-        if self.current_shard_idx != shard_idx:
-            log.info(f"Loading shard {self.shard_paths[shard_idx]} into RAM...")
-            # weights_only=False: preserve backward-compatible loading
-            self.data = torch.load(self.shard_paths[shard_idx], map_location="cpu", weights_only=False)
-            self.current_shard_idx = shard_idx
-            
+
+        # Binary-search the shard containing this global index.
+        shard_idx = bisect.bisect_right(self.cumulative_lengths, idx) - 1
+
         local_idx = idx - self.cumulative_lengths[shard_idx]
-        ids = self.data[local_idx]
+        # Row-level read from the memory-mapped shard: only this sequence's pages
+        # are faulted in, not the whole shard.
+        ids = self._shards[shard_idx][local_idx]
         
         # Match train.py contract: (input_ids, labels)
         # Defensively cast to long (int64) — nn.Embedding requires int64.

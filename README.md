@@ -85,7 +85,16 @@ git clone https://github.com/aaron-631/VantaLLM.git
 cd VantaLLM
 python3 -m venv .venv
 source .venv/bin/activate
+# Install the correct PyTorch wheel FIRST (see "Recommended installs" below) —
+# deepspeed builds against an already-present torch.
 pip install -r requirements.txt
+```
+
+The project is also packaged (`pyproject.toml`); to get the importable
+`vantallm` package on your path, install it editable after torch:
+
+```bash
+pip install -e .            # add [dev] for pytest, [data] for the datasets pipeline dep
 ```
 
 If you need tracked checkpoints rather than a source-only clone, hydrate Git-LFS objects explicitly:

@@ -800,10 +800,12 @@ class VantaTransformer(nn.Module):
     The full VantaLLM model — a single, config-driven transformer class.
 
     Model size is set entirely by ``LLMConfig``; the largest scaling-reference
-    config has an analytically estimated ~125B stored parameters with ~2-4B
-    active per token (sparse top-2 MoE routing). Parameter counts for the large
-    configs are analytical estimates, not measured; call
-    ``model.parameter_count()`` to verify for a given config.
+    config has an analytically estimated ~125B stored parameters with ~13B
+    active per token. Active count = always-on dense FFN + attention + embedding
+    + the sparse top-2 MoE experts (the dense FFN, not the MoE branch, dominates
+    the active budget). Parameter counts for the large configs are analytical
+    estimates, not measured; call ``model.parameter_count()`` to verify for a
+    given config.
 
     Token Embedding
       + 0.1 × persona_signal  (injected at embedding layer)

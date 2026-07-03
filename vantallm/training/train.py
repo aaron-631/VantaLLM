@@ -159,21 +159,26 @@ def clip_grad_norm_mixed_(parameters, max_norm, norm_type=2.0):
     if len(parameters) == 0:
         return 0.0
 
-    total_norm = 0.0
-    for p in parameters:
-        param_norm = p.grad.detach().data.float().norm(norm_type)
-        total_norm += param_norm.item() ** norm_type
-    total_norm = total_norm ** (1.0 / norm_type)
-    
-    clip_coef = max_norm / (total_norm + 1e-6)
+    # Compute the global norm on-device in a single reduction. Stacking the
+    # per-parameter (float32) norms and reducing avoids the previous
+    # per-parameter `.item()` call, which forced a host<->device sync for every
+    # parameter (hundreds of stalls per step). One sync remains at the end for
+    # the scalar clip coefficient / logging.
+    device = parameters[0].grad.device
+    per_param_norms = torch.stack(
+        [p.grad.detach().float().norm(norm_type).to(device) for p in parameters]
+    )
+    total_norm = torch.norm(per_param_norms, norm_type)
+
+    clip_coef = float(max_norm) / (total_norm.item() + 1e-6)
     if clip_coef < 1.0:
         for p in parameters:
             # Use .data.mul_() instead of .detach().mul_() — .data is guaranteed
             # to alias the same storage as p.grad in all PyTorch versions,
             # whereas .detach() alias guarantee does not hold on experimental nightlies.
             p.grad.data.mul_(clip_coef)
-            
-    return total_norm
+
+    return float(total_norm.item())
 
 
 def sanity_check_loop():
@@ -303,7 +308,19 @@ def sanity_check_loop():
                                 min_vocab = min(ckpt_weight.shape[0], model_weight.shape[0])
                                 new_weight[:min_vocab] = ckpt_weight[:min_vocab]
                                 state_dict[key] = new_weight
-                    model.load_state_dict(state_dict, strict=False)
+                    _load_result = model.load_state_dict(state_dict, strict=False)
+                    if _load_result.missing_keys:
+                        log_warning(
+                            f"Checkpoint load: {len(_load_result.missing_keys)} missing key(s) "
+                            f"(kept random init) — first few: {_load_result.missing_keys[:5]}"
+                        )
+                    if _load_result.unexpected_keys:
+                        log_warning(
+                            f"Checkpoint load: {len(_load_result.unexpected_keys)} unexpected key(s) "
+                            f"(ignored) — first few: {_load_result.unexpected_keys[:5]}"
+                        )
+                    if not _load_result.missing_keys and not _load_result.unexpected_keys:
+                        log_info("Checkpoint load: all keys matched exactly.")
                     if isinstance(checkpoint_data, dict):
                         _saved_optimizer_state = checkpoint_data.get("optimizer", None)
                 except Exception as e:
@@ -386,6 +403,12 @@ def sanity_check_loop():
     _ds_accum = 1
     if is_deepspeed_engine(model):
         _ds_accum = model.gradient_accumulation_steps()
+    else:
+        # DDP path: the loop calls lr_scheduler.step() only at gradient-
+        # accumulation boundaries, so the number of optimizer steps is
+        # num_steps // grad_accum_steps. Sizing the cosine for num_steps
+        # micro-batches (the old _ds_accum=1) meant it never reached eta_min.
+        _ds_accum = max(1, int(os.environ.get("GRAD_ACCUM_STEPS", 16)))
     _optimizer_steps = max(1, num_steps // _ds_accum)
     _warmup_steps = int(os.environ.get("LR_WARMUP_STEPS", max(1, min(200, _optimizer_steps // 10))))
     _cosine_steps = max(1, _optimizer_steps - _warmup_steps)

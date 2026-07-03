@@ -399,6 +399,10 @@ class BatchInferenceEngine:
             batched_masks = torch.cat(attention_masks, dim=0)
             prefill_position_ids = batched_masks.long().cumsum(dim=-1) - 1
             prefill_position_ids.masked_fill_(batched_masks == 0, 0)
+            # True (unpadded) length of each prompt. Decode-step RoPE positions
+            # must continue from this, NOT from the padded cache length, or a
+            # left-padded sequence gets the wrong relative offsets (Finding F12).
+            seq_true_len = batched_masks.long().sum(dim=1, keepdim=True)   # (B, 1)
 
             # Stack persona vectors; fall back to zeros for any None
             valid_vecs = [r.persona_vector for r in fresh_reqs if r.persona_vector is not None]
@@ -429,12 +433,25 @@ class BatchInferenceEngine:
                         log.error(f"FATAL: Token ID {batched_ids.max()} exceeds vocab_size {self.model.config.vocab_size}")
 
                 ids = generated if step == 0 else generated[:, -1:]
-                current_mask = batched_masks if step == 0 else None
+                # Pass the (B, S_kv) padding mask on EVERY step, not just prefill.
+                # batched_masks is extended by one column per step below, so at the
+                # start of each decode step its width already equals the cache's
+                # S_kv. Without it, decode queries attend to left-pad KV positions
+                # (Finding F12).
+                current_mask = batched_masks
+
+                # step 0: full left-padded prefill positions (cumsum-based).
+                # step k>=1: the single new token sits at each sequence's true
+                # position = true_len + (k - 1), independent of left-pad width.
+                step_positions = (
+                    prefill_position_ids if step == 0
+                    else seq_true_len + (step - 1)
+                )
 
                 logits, kv_caches, _ = self.model(
                     ids,
                     attention_mask=current_mask,
-                    position_ids=prefill_position_ids if step == 0 else None,
+                    position_ids=step_positions,
                     kv_caches=kv_caches,
                     use_kv_cache=True,
                     persona_vector=batched_persona,
@@ -516,6 +533,20 @@ class BatchInferenceEngine:
             kv_cache  = self._kv_sessions[req.session_id].cache
             generated = req.input_ids.to(self.device)
             t_start   = time.perf_counter()
+
+            # Prefill the full new turn into the reused KV cache before decoding.
+            # Feeding it one token at a time keeps each call at S=1, which the
+            # attention path masks correctly against the existing cache offset;
+            # a single multi-token call would need an offset causal mask.
+            # Previously only generated[:, -1:] was fed, so every token of the
+            # new user message except the last was silently dropped (Finding F13).
+            for _j in range(generated.shape[1] - 1):
+                _, kv_cache, _ = self.model(
+                    generated[:, _j:_j + 1],
+                    kv_caches=kv_cache,
+                    use_kv_cache=True,
+                    persona_vector=req.persona_vector,
+                )
 
             for step in range(req.max_new_tokens):
                 if cancel_event.is_set():
@@ -700,7 +731,17 @@ def load_model() -> VantaTransformer:
                     new_weight[:min_vocab] = ckpt_weight[:min_vocab]
                     state_dict[key] = new_weight
 
-        model.load_state_dict(state_dict, strict=False)
+        _load_result = model.load_state_dict(state_dict, strict=False)
+        if _load_result.missing_keys:
+            log.warning(
+                f"Checkpoint load: {len(_load_result.missing_keys)} missing key(s) "
+                f"(kept random init) — first few: {_load_result.missing_keys[:5]}"
+            )
+        if _load_result.unexpected_keys:
+            log.warning(
+                f"Checkpoint load: {len(_load_result.unexpected_keys)} unexpected key(s) "
+                f"(ignored) — first few: {_load_result.unexpected_keys[:5]}"
+            )
         log.info(f"Loaded weights from {model_path} (patched for vocab mismatch if needed)")
     else:
         reason = "not set" if not model_path else f"{model_path!r} not found"
