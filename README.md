@@ -1,33 +1,63 @@
 # VantaLLM
 
-A modular framework for training decoder-only transformer language models from scratch, designed for experimentation, research, and scalable distributed pretraining.
+VantaLLM is a from-scratch PyTorch framework for training decoder-only language models, with a modular transformer core, a custom tokenizer, an incremental sharded data pipeline, and first-class distributed training support.
 
 The model architecture, training pipeline, and configurations were designed and implemented by Aaron Chakraborty.
 
-> **Note:** Trained model weights are not included in this repository due to size constraints. This repository provides the complete infrastructure, training code, and architectural configurations required to train the model from scratch.
+> **Note:** Trained model weights are not included in this repository due to size constraints. This repository ships the full training, inference, tokenizer, and distributed-systems stack required to reproduce runs from source.
+
+## What This Project Demonstrates
+
+VantaLLM is intended to read like a serious end-to-end LLM systems project, not just a model definition. The repository demonstrates:
+
+- **Core model engineering:** a custom decoder-only transformer with RoPE, GQA, RMSNorm, SwiGLU, and alternating dense/MoE feedforward blocks.
+- **Training systems work:** explicit distributed launch paths, DeepSpeed ZeRO integration, checkpoint-safe training, and hardware-aware validation flow.
+- **Data pipeline discipline:** append-only normalization, deduplication, tokenization, sharding, and manifest-backed reproducibility.
+- **Inference and verification:** local demos, distributed bring-up checks, GPU readiness checks, and test coverage around the active tokenizer/model contract.
+- **Scalable design thinking:** the same codepaths support tiny local debugging, validated A100 20GB reference runs, and larger multi-GPU deployments through config changes rather than branch-specific logic.
 
 ## Overview
 
-VantaLLM is an open-source research repository built for exploring large-scale LLM training dynamics. It provides a robust, dependency-light PyTorch foundation for modern LLM pretraining, featuring a highly configurable Transformer architecture, a custom tokenizer pipeline, and native support for distributed training (DDP and DeepSpeed). 
+VantaLLM is built as an end-to-end LLM engineering project rather than a model file in isolation. The repository covers:
 
-While the framework is dataset-agnostic, the data pipeline is bundled with tools that can process domain-specific texts (such as cybersecurity corpora) as example workloads for full-stack validation.
+- **Transformer architecture from scratch** in PyTorch.
+- **Custom tokenizer + prompt contract** with stable chat markers.
+- **Incremental data pipeline** for normalization, tokenization, and binary sharding.
+- **Distributed training paths** for PyTorch DDP and DeepSpeed ZeRO.
+- **Inference and validation tooling** for local debugging, audits, and system bring-up.
 
-## Features
+The codebase is GPU-agnostic by design: it runs on small local setups for structural testing, on A100-class hardware for the validated 567M reference path, and can scale forward to larger multi-GPU environments through the same codepaths and JSON configuration system.
 
-- **Modular Architecture**: A clean, hackable decoder-only transformer built in PyTorch.
-- **Distributed Training**: First-class support for Multi-GPU training via PyTorch DDP and DeepSpeed ZeRO.
-- **Dynamic Configuration**: JSON-based model configurations allowing for rapid scaling from tiny debug models to multi-billion parameter architectures.
-- **Robust Data Pipeline**: Sharded data processing, fast tokenization, and seamless integration with HuggingFace datasets.
-- **Inference Server**: Built-in FastAPI server for querying checkpoints locally.
+## Read First
 
-## Architecture
+- [docs/technical_report.md](docs/technical_report.md): architecture, scaling rationale, and distributed design.
+- [docs/gpu_cluster_guide.md](docs/gpu_cluster_guide.md): A100 reference guidance, DeepSpeed behavior, and high-capacity compute notes.
+- [docs/inference_rag_guide.md](docs/inference_rag_guide.md): prompt parity, RAG routes, serving API, and persona routing.
+- [data_pipeline/DATASET_SPEC.md](data_pipeline/DATASET_SPEC.md): slice/shard contract and dataset manufacturing assumptions.
+- [CONTRIBUTING.md](CONTRIBUTING.md): contribution workflow.
 
-VantaLLM implements a modern causal language model featuring:
-- Rotary Position Embeddings (RoPE)
-- SwiGLU Feed-Forward Networks
-- RMSNorm for training stability
-- Mixed-precision (BF16/FP16) support for hardware acceleration
-- FlashAttention integration (where supported)
+The documentation set is intentionally small. Each file is supposed to answer a different operational question rather than restate the same material in different wording.
+
+## Architecture At A Glance
+
+VantaLLM implements a modern causal decoder-only stack featuring:
+
+- **Rotary Position Embeddings (RoPE)** for long-context positional encoding.
+- **Grouped-Query Attention (GQA)** with quantized KV-cache support.
+- **RMSNorm + SwiGLU** in a pre-norm transformer formulation.
+- **Alternating dense and MoE blocks** with top-k expert routing.
+- **Persona-conditioning hooks** for both training-time and inference-time control paths.
+- **JSON-driven scaling** from tiny debug models to large analytical reference configs.
+
+## Current Reference Contract
+
+The current public reference path is:
+
+- **Model config:** `configs/vanta_567m.json`
+- **Tokenizer vocab:** `151003`
+- **Persisted chat tokens:** `<|user|>=151000`, `<|assistant|>=151001`, `<|system|>=151002`
+- **Pipeline entrypoint:** `./run_pipeline.sh`
+- **Distributed launchers:** `vantallm/distributed/launch_ddp.sh` and `vantallm/distributed/launch_deepspeed.sh`
 
 ## Installation
 
@@ -39,31 +69,179 @@ source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
-*(Note: For GPU acceleration, ensure you have the correct PyTorch CUDA wheels installed for your system's CUDA version.)*
+If you need tracked checkpoints rather than a source-only clone, hydrate Git-LFS objects explicitly:
+
+```bash
+git lfs install
+git lfs pull
+```
+
+Notes:
+
+- Install the correct PyTorch wheel separately for your CUDA runtime if you are targeting GPU execution.
+- The training loop currently uses `bitsandbytes.optim.PagedAdamW8bit`; install `bitsandbytes` before running training jobs.
+- Copy `.env.example` to `.env` only if you want a local environment file for your own workflow.
+- Do not use GitHub's "Download ZIP" flow if you expect checkpoint files; it can leave Git-LFS pointers unhydrated.
+
+Recommended installs:
+
+```bash
+# A100 / CUDA 12.1 reference path
+pip install torch==2.11.0+cu121 --index-url https://download.pytorch.org/whl/cu121
+
+# CPU-only local smoke testing
+pip install torch==2.11.0
+```
 
 ## Quick Start
 
-### 1. Prepare the Environment
-Copy the example environment file and configure it:
+### 1. Architecture Sanity Check
+
+Run the built-in architecture demo to validate the transformer core, KV-cache compression path, and PPO scaffold:
+
 ```bash
-cp .env.example .env
+python3 -m vantallm.model.transformer
 ```
 
-### 2. Process Data
-Run the standard pipeline to normalize, tokenize, and shard your dataset:
+### 2. Distributed Bring-Up Check
+
+Validate device visibility, backend selection, and all-reduce behavior before launching heavy jobs:
+
+```bash
+python3 verify_distributed.py
+torchrun --nproc_per_node=2 verify_distributed.py
+```
+
+### 3. Data Pipeline
+
+Run the supported end-to-end pipeline entrypoint:
+
 ```bash
 ./run_pipeline.sh
+python3 verify_gpu_ready.py
 ```
 
-### 3. Train a Tiny Model (Smoke Test)
-Validate your environment by training a small configuration:
+Drop general corpus files into `data_pipeline/raw/` and domain-specific pretraining files into `data_pipeline/raw/pretrain/`, then re-run the same pipeline entrypoint.
+
+Important pipeline terminology:
+
+- A **slice** is a human-readable `.jsonl` subset used for inspection, debugging, and early smoke tests.
+- A **shard** is a packed binary `.bin` tensor file used for sustained training throughput.
+- `data_pipeline/pipeline_manifest.json` tracks file lifecycle state, and `data_pipeline/global_hash_log.json` protects cross-run deduplication.
+
+### 4. Local Inference Demo
+
+Run a minimal generation demo with either random weights or a supplied checkpoint:
+
 ```bash
-TINY_MODEL=1 QUANT_MODE=bf16 python3 vantallm/training/train.py
+python3 demo_inference.py --prompt "Explain rotary position embeddings in one paragraph."
 ```
+
+### 5. Training Entry Points
+
+For a repo-native showcase smoke test:
+
+```bash
+export TRAIN_STEPS=10
+export TINY_MODEL=1
+export QUANT_MODE=bf16
+export DATA_MODE=showcase
+export DATA_PATH=data_pipeline/rag_synthetic_slice_v2_fixed.jsonl
+python3 vantallm/training/train.py
+```
+
+For the 567M shard-backed reference path:
+
+```bash
+export MODEL_CONFIG=configs/vanta_567m.json
+export TRAIN_STEPS=1000
+export DATA_MODE=shard
+export QUANT_MODE=bf16
+bash vantallm/distributed/launch_ddp.sh 1
+```
+
+## Validation Path
+
+For the cleanest bring-up sequence, follow this order:
+
+1. `python3 -m vantallm.model.transformer`
+2. `python3 verify_distributed.py`
+3. `python3 verify_gpu_ready.py`
+4. Tiny showcase training with explicit `TRAIN_STEPS`
+5. `bash vantallm/distributed/launch_ddp.sh <gpus>`
+6. `bash vantallm/distributed/launch_deepspeed.sh <gpus>`
+
+This ordering matters. Distributed topology should be validated before expensive model execution, and shard integrity should be validated before shard-backed training.
+
+## GPU Validation Matrix
+
+| Stage | Command | Expected Outcome | If It Fails |
+|---|---|---|---|
+| CUDA visibility | `nvidia-smi` | Target GPU is visible with expected VRAM | Driver, runtime, or device issue |
+| Torch CUDA check | `python3 -c "import torch; print(torch.cuda.device_count())"` | Correct GPU count | PyTorch/CUDA wheel mismatch |
+| Distributed sanity | `python3 verify_distributed.py` | Single-node validation completes | Base environment issue |
+| Multi-rank backend | `torchrun --nproc_per_node=<gpus> verify_distributed.py` | All-reduce succeeds | NCCL, topology, or rank wiring issue |
+| Architecture sanity | `python3 -m vantallm.model.transformer` | Built-in forward/inference checks pass | Core architecture regression |
+| Shard readiness | `python3 verify_gpu_ready.py` | Shards load and sample cleanly | Pipeline or shard integrity issue |
+| Tiny smoke train | `TRAIN_STEPS=10 TINY_MODEL=1 DATA_MODE=showcase DATA_PATH=data_pipeline/rag_synthetic_slice_v2_fixed.jsonl python3 vantallm/training/train.py` | Training loop, optimizer, and checkpoint path work | Runtime or data contract issue |
+| 567M single-GPU | `MODEL_CONFIG=configs/vanta_567m.json TRAIN_STEPS=1000 DATA_MODE=shard bash vantallm/distributed/launch_ddp.sh 1` | A100-class reference run starts cleanly | Memory or config issue |
+| DDP multi-GPU | `MODEL_CONFIG=configs/vanta_567m.json TRAIN_STEPS=1000 DATA_MODE=shard bash vantallm/distributed/launch_ddp.sh <gpus>` | Rank-synchronised progress | DDP orchestration issue |
+| DeepSpeed ZeRO | `MODEL_CONFIG=configs/vanta_567m.json TRAIN_STEPS=1000 DATA_MODE=shard bash vantallm/distributed/launch_deepspeed.sh <gpus>` | ZeRO initialises and trains | DeepSpeed config or offload issue |
+| Prompt/RAG signal | `python3 tests/test_rag_logit_probe.py` | Context increases target-token probability | Prompt or attention-path issue |
+| Server E2E | `python3 tests/test_e2e.py` | Tokenizer ↔ server ↔ model path works | LFS checkpoint, tokenizer, or API issue |
+
+Treat the matrix as staged escalation. Do not skip directly to expensive distributed runs on new hardware.
+
+## Prompt Parity And RAG
+
+RAG support is implemented as a contract, not an ad hoc prompt convention:
+
+- All training, evaluation, and inference prompt assembly is supposed to flow through `vantallm.utils.prompting.build_prompt`.
+- The active prompt utility version is `v1_parity_hardened`.
+- Retrieved context is inserted through the shared builder, which applies the `--- RETRIEVED CONTEXT ---` boundaries consistently.
+- The repo includes two concrete validation paths: `tests/test_rag_logit_probe.py` for token-probability amplification and `tests/test_rag_readiness.py` for contradiction-style contextual response checks.
+
+For integration details and serving payloads, see [docs/inference_rag_guide.md](docs/inference_rag_guide.md).
+
+## Inference And Personas
+
+The FastAPI inference server supports:
+
+- `GET /health`
+- `POST /generate`
+- `POST /generate/stream`
+
+The persona routing layer currently exposes:
+
+- `cyber_researcher`
+- `security_ciso`
+- `technical_educator`
+- `general_assistant`
+
+These personas are not separate models; they are routing and conditioning modes over the same model stack. Retrieval-style routes can pass `context_chunks` and `chunk_ids`, and streaming responses are emitted as Server-Sent Events.
+
+## Operational Notes
+
+- `TRAIN_STEPS` is mandatory and is treated as an **absolute target step**, not “additional steps from the checkpoint.”
+- `./run_pipeline.sh` is the supported operator entrypoint for dataset processing.
+- Do not manually edit `data_pipeline/pipeline_manifest.json` or `data_pipeline/global_hash_log.json`.
+- Do not rename shard files by hand.
+- The 567M config is the validated public reference path for A100 20GB-class bring-up.
+- Hardware scaling is driven by a small set of knobs: `MODEL_CONFIG`, `BATCH_SIZE`, `GRAD_ACCUM_STEPS`, `QUANT_MODE`, and the DeepSpeed JSON configs.
+- On larger GPUs, start from the validated 567M contract and raise per-GPU batch or reduce accumulation only after the baseline path is stable.
+- For long or expensive distributed jobs, use `tmux` or `screen` so initialization delays do not kill the session.
+- High-capacity GPUs and larger multi-node deployments are documented as an additional capability in [docs/gpu_cluster_guide.md](docs/gpu_cluster_guide.md); they are not a separate codebase or special branch.
+
+## Documentation Map
+
+- [docs/technical_report.md](docs/technical_report.md): architectural explanation and scaling methodology.
+- [docs/gpu_cluster_guide.md](docs/gpu_cluster_guide.md): hardware validation, DDP, DeepSpeed, and “big GPU” operational notes.
+- [docs/inference_rag_guide.md](docs/inference_rag_guide.md): prompt parity, RAG validation, FastAPI routes, and persona behaviour.
+- [data_pipeline/DATASET_SPEC.md](data_pipeline/DATASET_SPEC.md): dataset lifecycle, slice/shard terminology, and manifest contract.
 
 ## Repository Layout
 
-```
+```text
 VantaLLM/
 ├── README.md
 ├── LICENSE
@@ -94,46 +272,6 @@ VantaLLM/
 └── checkpoints/        # (gitignored) Local model weights storage
 ```
 
-## Configuration System & Scaling
-
-VantaLLM handles model hyperparameters via a lightweight JSON configuration system.
-
-### The 567M Reference Configuration (`vanta_567m.json`)
-The 567M parameter configuration acts as the heavily validated reference implementation. It is specifically designed and optimized to train on **NVIDIA A100 GPUs (AI Koch cluster)**. 
-
-To maximize throughput and prevent Out-Of-Memory (OOM) errors on the A100's VRAM, the training loop relies on:
-- **Batch Sizing & Gradient Accumulation:** Micro-batches are kept small to fit the KV-cache and optimizer states in memory. We heavily utilize gradient accumulation steps to simulate a globally massive batch size for stable convergence.
-- **Precision:** BF16 (Bfloat16) mixed precision is enforced to utilize the A100 Ampere Tensor Cores effectively, cutting memory consumption in half with no loss in model accuracy.
-
-### Analytical Scaling Configurations
-The repository also includes scaling profiles for future expansion:
-- `vanta_125b.json` (125 Billion Parameters)
-- `vanta_235b.json` (235 Billion Parameters)
-
-*Please note: The 125B and 235B configurations are purely analytical and theoretical scaling references. They have not been experimentally validated or trained to convergence in this repository.*
-
-## Distributed Training
-
-VantaLLM supports multi-node and multi-GPU training out of the box.
-
-For DDP (Distributed Data Parallel):
-```bash
-bash vantallm/distributed/launch_ddp.sh
-```
-
-For DeepSpeed ZeRO:
-```bash
-bash vantallm/distributed/launch_deepspeed.sh
-```
-
-## Inference
-
-To interact with a trained checkpoint, use the built-in FastAPI server:
-```bash
-python3 vantallm/inference/server.py
-```
-You can then submit generation requests via standard HTTP POST calls.
-
 ## Roadmap
 
 - [ ] Implement FlashAttention-2 natively into the Transformer core.
@@ -149,6 +287,7 @@ You can then submit generation requests via standard HTTP POST calls.
 ## Citation
 
 If you use VantaLLM in your research or project, please cite it as:
+
 ```bibtex
 @software{VantaLLM2026,
   author = {Chakraborty, Aaron},

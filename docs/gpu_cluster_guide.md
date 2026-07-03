@@ -2,6 +2,25 @@
 
 This guide details the procedures for hardware validation, distributed training execution, and multi-GPU cluster usage for VantaLLM.
 
+## Preflight Environment
+
+Before launching any expensive run, make sure the shell session is explicit and reproducible:
+
+```bash
+source .venv/bin/activate
+set -a
+[ -f .env ] && source .env
+set +a
+
+export QUANT_MODE=bf16
+export MASTER_ADDR=${MASTER_ADDR:-127.0.0.1}
+export MASTER_PORT=${MASTER_PORT:-29500}
+export NCCL_DEBUG=${NCCL_DEBUG:-INFO}
+export PYTHONUNBUFFERED=1
+```
+
+If you are starting a long DDP or DeepSpeed run, use `tmux` or `screen` first.
+
 ## Hardware Validation
 
 Before initiating large-scale training, validate the CUDA execution environment and memory allocation compatibility. 
@@ -10,6 +29,18 @@ Before initiating large-scale training, validate the CUDA execution environment 
 1. Verify CUDA availability and memory capacity using `nvidia-smi`.
 2. Ensure Bfloat16 support is enabled for NVIDIA Ampere (or newer) architectures.
 3. Run a minimal smoke test (e.g., using `TINY_MODEL=1`) to confirm the training loop runs successfully and checkpoint saving mechanisms are functional.
+
+## Recommended Bring-Up Order
+
+The cleanest staged path is:
+
+1. `python3 verify_distributed.py`
+2. `torchrun --nproc_per_node=<gpus> verify_distributed.py`
+3. `TRAIN_STEPS=10 TINY_MODEL=1 DATA_MODE=showcase DATA_PATH=data_pipeline/rag_synthetic_slice_v2_fixed.jsonl python3 vantallm/training/train.py`
+4. `MODEL_CONFIG=configs/vanta_567m.json TRAIN_STEPS=1000 DATA_MODE=shard bash vantallm/distributed/launch_ddp.sh <gpus>`
+5. `MODEL_CONFIG=configs/vanta_567m.json TRAIN_STEPS=1000 DATA_MODE=shard bash vantallm/distributed/launch_deepspeed.sh <gpus>`
+
+The important rule is to validate topology first, then local training, then shard-backed training, and only then escalate to multi-rank orchestration.
 
 ## Distributed Launch Instructions
 
@@ -29,6 +60,13 @@ deepspeed --num_gpus=4 vantallm/training/train.py --deepspeed vantallm/distribut
 ```
 DeepSpeed ZeRO-1 and ZeRO-2 will partition optimizer states and gradients across available ranks, freeing up significant VRAM for larger batch sizes.
 
+Repo-native launchers are also provided:
+
+```bash
+bash vantallm/distributed/launch_ddp.sh 4
+bash vantallm/distributed/launch_deepspeed.sh 4
+```
+
 ## NCCL Configuration
 When running on distributed clusters, ensure NCCL is configured correctly to prevent deadlocks:
 - Set `NCCL_DEBUG=INFO` for verbosity during initial testing.
@@ -38,17 +76,55 @@ When running on distributed clusters, ensure NCCL is configured correctly to pre
 
 - **OOM (Out Of Memory):** Reduce `BATCH_SIZE` or enable DeepSpeed ZeRO-offload to CPU.
 - **Deadlocks during DDP:** Verify all processes are reading from the same data shards and that network topologies allow peer-to-peer communication between GPUs. If testing with very small datasets, ensure ranks do not exhaust data unevenly, as this causes a distributed deadlock.
+- **No shards found:** Run `./run_pipeline.sh` or `python3 data_pipeline/shard_data.py` before using `DATA_MODE=shard`.
+- **Immediate trainer exit:** `TRAIN_STEPS` is mandatory. The training script intentionally refuses to infer a default target step count.
 
 ## DeepSpeed ZeRO-3 Initialisation (CPU Offload)
 When utilizing ZeRO-3 with CPU offloading for large models (e.g., 125B parameter profiles):
 - **Initialization Silence:** `deepspeed.initialize()` must instantiate the full model on the CPU, partition it, allocate offloaded optimizer states, and move initial parameter shards to the GPUs. This CPU-bound phase can take **30 to 90 minutes of complete silence**.
 - **Use Multiplexers:** You MUST use a terminal multiplexer (`tmux` or `screen`). If you run the command directly over SSH, the session will time out during the silent graph construction, killing the process (`SIGHUP`).
-- **Dependencies:** Ensure `libaio-devel` is installed on your Linux system. It is strictly required for asynchronous I/O during ZeRO CPU offloading.
+- **Dependencies:** Ensure `python3-devel`, `gcc-c++`, `make`, `git`, and `libaio-devel` are installed on your Linux system. They are strictly required for compiling C++ DeepSpeed extensions and for asynchronous I/O during ZeRO CPU offloading.
 - **LR Scheduler Compatibility:** PyTorch LR schedulers fail the `isinstance` check against `DeepSpeedZeroOptimizer_Stage3`. The training script automatically extracts the base optimizer (`optimizer.optimizer`) to prevent crashes.
+- **125B Swapfile Requirements:** The 125B model combined with an 8-bit partitioned optimizer requires exactly 1,500 GB of virtual memory. For single-node runs on a standard 692GB node, an **850GB+ NVMe swapfile is absolutely mandatory** to prevent OOM kills during paging.
+- **Optimizer Selection:** For the 125B run, you must use `bitsandbytes.optim.PagedAdamW8bit` to fit within memory constraints.
 
 ## A100 20GB Configuration Notes
 The 567M model reference configuration (`vanta_567m.json`) is designed to easily fit within a 20GB VRAM footprint using the default micro-batch size and gradient accumulation settings. 
 
-The validation and scaling advice provided in this guide applies equally to 20GB, 40GB, and 80GB A100 environments. For 20GB architectures on the AI Koch cluster, you can reliably use standard BF16 mixed-precision and DeepSpeed ZeRO-1 without encountering Out-Of-Memory (OOM) errors during the backward pass.
+The validation and scaling advice provided in this guide applies equally to 20GB, 40GB, and 80GB A100 environments. For 20GB-class A100 setups, the validated reference path uses standard BF16 mixed precision and DeepSpeed ZeRO-1 without requiring branch-specific code changes.
 
-The same distributed topology assumptions also carry forward to Blackwell-class multi-node deployments. Revalidate kernel, NCCL, and micro-batch settings on the target cluster, but the package layout and launcher/config separation here are designed to remain forward-compatible.
+### Hardware Tuning Knobs
+
+When moving between A100, H100, and newer high-memory GPU environments, the intended operator knobs are:
+
+- `MODEL_CONFIG` for architectural scale
+- `BATCH_SIZE` for per-rank micro-batch size
+- `GRAD_ACCUM_STEPS` for effective global batch size in non-DeepSpeed runs
+- DeepSpeed JSON `gradient_accumulation_steps` for ZeRO-managed runs
+- `QUANT_MODE` for BF16/FP16 selection
+- The config's `gradient_checkpointing` and `max_seq_len` fields for memory pressure control
+
+Recommended policy:
+
+1. Validate the unchanged 567M reference path first.
+2. Increase `BATCH_SIZE` or reduce accumulation on larger GPUs before changing architecture.
+3. Escalate ZeRO stage or model config only after the smaller path is stable.
+4. Revalidate NCCL/backend behavior any time node topology changes.
+
+### Scaling to High-Capacity Compute (Big GPUs)
+When scaling up to massive architectures (e.g., next-generation compute nodes with significantly larger VRAM pools):
+- The distributed topology assumptions inherently scale forward. Ensure you revalidate your kernel versions, NCCL backend, and micro-batch settings for the target cluster architecture.
+- For immense parameter expansions, rely on ZeRO-3 parameter/optimizer partitioning. The package layout and dynamic JSON configuration (e.g., decoupling dimensions and accumulation steps) are designed to remain forward-compatible for clusters handling these advanced workloads without requiring core logic modifications.
+- The forward-compatibility point is architectural, not marketing language: larger GPUs should not require a separate codebase, only a revalidated config, topology, and launch plan.
+
+## Stop Rules for Expensive Runs
+
+Abort the run and fall back to a smaller validation step if any of the following occurs:
+
+- `verify_distributed.py` hangs during initialization for more than a couple of minutes.
+- GPU memory allocation rises monotonically step after step without stabilizing.
+- Loss becomes `NaN` or `Inf`.
+- Throughput collapses suddenly and stays depressed across multiple logging windows.
+- Multi-rank jobs stall because ranks consume uneven data or one rank exits early.
+
+Do not patch a live unstable training run. Kill the process group, return to the previous successful stage, and isolate the failure there.
