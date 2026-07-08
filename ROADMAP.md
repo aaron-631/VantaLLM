@@ -24,6 +24,14 @@ The following outlines the immediate and long-term architectural priorities for 
 - **125B 4-GPU ZeRO-3 bring-up path**: `configs/vanta_125b_bringup.json`,
   `scripts/launch_vanta_4gpu.sh`, params-only offload, gradient clipping, and a
   fail-fast batch-consistency check.
+- **Multi-node DeepSpeed enablement**: DeepSpeed-native distributed init (so ZeRO-3
+  sees the true world size), a hostfile-based multi-node launcher, an 8-GPU ZeRO-3
+  CPU-optimizer-offload config, and automatic use of `DeepSpeedCPUAdam` when the
+  config owns the optimizer. Full cluster runbook + bring-up pitfalls in
+  [`docs/multinode_deepspeed_guide.md`](docs/multinode_deepspeed_guide.md).
+- **MoE eval-mode capacity fix**: capacity token-dropping is gated on `self.training`
+  so incremental KV-cache decode keeps every token and stays exact (KV-cache ==
+  no-cache invariant restored).
 
 ## Task Backlog
 

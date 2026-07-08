@@ -2,6 +2,11 @@
 
 This guide details the procedures for hardware validation, distributed training execution, and multi-GPU cluster usage for VantaLLM.
 
+> **Multi-node clusters:** for 2+ node ZeRO-3 runs (hostfile, CPU optimizer offload, and
+> the full set of cluster bring-up pitfalls and fixes), see
+> [multinode_deepspeed_guide.md](multinode_deepspeed_guide.md). This guide covers the
+> single-node reference and validation path that should be stable first.
+
 ## Preflight Environment
 
 Before launching any expensive run, make sure the shell session is explicit and reproducible:

@@ -217,6 +217,22 @@ def sanity_check_loop():
         elif _arg == "--deepspeed_config" and _i + 1 < len(sys.argv):
             _ds_config_path = sys.argv[_i + 1]
 
+    # Does the DeepSpeed config define its OWN optimizer block? ZeRO-Offload
+    # (offload_optimizer) requires DeepSpeed's native CPU optimizer
+    # (DeepSpeedCPUAdam) and REJECTS a client-provided optimizer with
+    # "ZeRORuntimeException: You are using ZeRO-Offload with a client provided
+    # optimizer". When the config defines an "optimizer" block we therefore skip
+    # building the local bitsandbytes optimizer and pass optimizer=None so
+    # DeepSpeed constructs its own from the JSON. (The single-node zero2/zero3
+    # configs have NO optimizer block → the bnb PagedAdamW8bit path is unchanged.)
+    _ds_defines_optimizer = False
+    if "--deepspeed" in sys.argv and _ds_config_path and os.path.exists(_ds_config_path):
+        try:
+            with open(_ds_config_path) as _f:
+                _ds_defines_optimizer = "optimizer" in json.load(_f)
+        except Exception:
+            _ds_defines_optimizer = False
+
     # ── Fail-fast: batch-size / DeepSpeed consistency ──────────────────────────
     # DeepSpeed requires the batch fields to satisfy:
     #   train_batch_size == micro_batch_per_gpu * world_size * grad_accum
@@ -388,15 +404,28 @@ def sanity_check_loop():
 
     # Dynamic LR assigned via Environment Variables
     peak_lr = float(os.environ.get("LR_PEAK", "3e-6"))
-    try:
-        import bitsandbytes as bnb
-        optimizer = bnb.optim.PagedAdamW8bit(model.parameters(), lr=peak_lr, weight_decay=0.01)
-        log_info("Using bitsandbytes PagedAdamW8bit optimizer.")
-    except ImportError:
-        log_warning("bitsandbytes not available. Falling back to torch.optim.AdamW.")
-        optimizer = torch.optim.AdamW(model.parameters(), lr=peak_lr, weight_decay=0.01)
+    if _ds_defines_optimizer:
+        # ZeRO-Offload path: the DeepSpeed config owns the optimizer. Build none
+        # here and let deepspeed.initialize() construct DeepSpeedCPUAdam from the
+        # config's "optimizer" block. Under multi-node ZeRO-3 the fp32 optimizer
+        # state shards across all ranks, so it fits per-node host RAM — the
+        # single-node "bnb 8-bit is mandatory" reasoning does not apply here.
+        optimizer = None
+        log_info(
+            "DeepSpeed config defines its own optimizer block (ZeRO-Offload): "
+            "skipping local optimizer; DeepSpeed will build DeepSpeedCPUAdam. "
+            "Note: the LR comes from the config's optimizer.params.lr, not LR_PEAK."
+        )
+    else:
+        try:
+            import bitsandbytes as bnb
+            optimizer = bnb.optim.PagedAdamW8bit(model.parameters(), lr=peak_lr, weight_decay=0.01)
+            log_info("Using bitsandbytes PagedAdamW8bit optimizer.")
+        except ImportError:
+            log_warning("bitsandbytes not available. Falling back to torch.optim.AdamW.")
+            optimizer = torch.optim.AdamW(model.parameters(), lr=peak_lr, weight_decay=0.01)
 
-    if _saved_optimizer_state is not None:
+    if optimizer is not None and _saved_optimizer_state is not None:
         try:
             optimizer.load_state_dict(_saved_optimizer_state)
             log_info("Restored optimizer state (Adam m/v terms).")
