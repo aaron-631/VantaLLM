@@ -26,15 +26,51 @@ Several implementation choices are worth calling out because they reflect system
 
 VantaLLM implements a modern causal decoder-only Transformer. Key architectural deviations from the standard vanilla Transformer include:
 
-- **Positional Encoding:** We utilize Rotary Position Embeddings (RoPE), injecting relative positional information directly into the attention mechanisms rather than using absolute token embeddings.
+- **Positional Encoding:** We utilize Rotary Position Embeddings (RoPE), injecting relative positional information directly into the attention mechanisms rather than using absolute token embeddings. A single RoPE instance is shared across all transformer blocks, and its cos/sin cache is grown lazily on demand rather than materialized at the full `max_seq_len` per layer — so the 128K capability ceiling costs no memory until sequences actually approach it.
 - **Activation Functions:** SwiGLU replaces the standard ReLU/GELU in the Feed-Forward Networks (FFN), offering better gradient flow and empirical performance.
 - **Normalization:** Pre-norm formulation using Root Mean Square Normalization (RMSNorm) is applied to stabilize deep network training.
 - **Attention Mechanism:** Grouped-Query Attention (GQA) reduces KV-cache pressure while preserving multi-head expressivity. The codebase also includes hooks for integrating FlashAttention in future high-throughput paths.
-- **Feedforward Layout:** The shipped transformer alternates dense blocks with sparse Mixture-of-Experts (MoE) blocks using top-k routing rather than treating MoE as an external add-on.
+- **Feedforward Layout:** The shipped transformer alternates dense blocks with sparse Mixture-of-Experts (MoE) blocks using top-k routing rather than treating MoE as an external add-on. The MoE layer stores its experts as three batched weight tensors and computes all experts with a grouped `torch.bmm` (see §3.1), instead of iterating expert submodules in Python.
 - **Conditioning Hooks:** Persona-conditioning vectors are carried through the architecture so the same core stack can support controlled training and inference flows.
 - **Inference Efficiency:** KV-cache compression and quantized cache handling are built into the inference path for lower-memory autoregressive decoding.
 - **TurboQuant Contract:** The repository includes an INT8 KV-cache compression path with reconstruction checks in the built-in system tests and module self-test path.
-- **MoE Safety Scaffolding:** `capacity_factor` enables optional bounded expert capacity; overflow handling retains the highest-weight assignments deterministically instead of silently dropping tokens.
+- **MoE Safety Scaffolding:** `capacity_factor` bounds per-expert capacity so per-step memory is deterministic and cannot spike on router skew; overflow tokens are dropped to the block residual (Switch-Transformer style) rather than growing an unbounded buffer. The reference configs set `capacity_factor = 1.25`.
+
+### 3.1 Distributed MoE at scale (batched grouped-GEMM)
+
+The MoE feedforward is the one place where a naive implementation quietly breaks
+large multi-GPU training, so it is worth describing precisely.
+
+**The problem with the obvious implementation.** The direct way to write a
+128-expert MoE is a Python loop: hold 128 separate expert submodules, and for each
+expert gather its routed tokens and run them. This is correct and readable, but
+under DeepSpeed ZeRO-3 with CPU parameter offload each expert submodule is a
+separately-sharded parameter group, so touching it triggers its own gather from
+CPU. With 128 experts across ~47 MoE layers that is thousands of small gathers per
+step — a "parameter-fetching avalanche" in which the GPUs spend almost all their
+time waiting on the host interconnect, and a large run appears to hang.
+
+**The implementation used here.** Each MoE layer stores its experts as three
+batched parameters — `w_gate (E, d_model, d_ff)`, `w_up (E, d_model, d_ff)`,
+`w_down (E, d_ff, d_model)` — so a layer's experts are three large tensors, not
+384 small ones. Routing is unchanged (the persona-aware top-k router is untouched).
+Dispatch places each routed (token, slot) into a fixed-capacity buffer
+`(E, capacity, d_model)` using a segmented prefix-count index so every slot lands
+in a unique position with no scatter collision. All experts then run as a grouped
+`torch.bmm` over the expert dimension, and the results are combined back with a
+single weighted `index_add`. Parameter count is identical to the per-expert layout;
+only the storage shape and the dispatch changed. Under ZeRO-3 this collapses the
+per-layer gather count from ~384 to 3.
+
+**Global load balancing.** The auxiliary load-balancing loss averages its
+expert-usage histogram across data-parallel ranks with an `all_reduce` before the
+loss is formed, so the router balances the global token distribution rather than
+each GPU's local shard in isolation. This is a no-gradient statistic, so the
+collective is autograd-free and symmetric across ranks.
+
+The batched dispatch is verified on CPU against a reference per-expert loop
+(bit-level agreement to ~1e-8 with unbounded capacity) and for gradient-checkpoint
+determinism; see `tests/test_batched_moe.py`.
 
 ## 4. Tokenizer and Data Pipeline
 
@@ -134,12 +170,15 @@ future work rather than shipped as an unvalidated change.
 The following are intentional simplifications appropriate for a single-node,
 from-scratch reference; each is labeled in-code:
 
-- **MoE dispatch is a Python per-expert loop** (dense-in-graph, sparse-in-compute).
-  Every expert runs on every rank and processes only its routed tokens via
-  `index_add_`. This is DDP/ZeRO-safe and correct, but does **not** implement
-  expert-parallelism, all-to-all, or grouped-GEMM, so it is not throughput-optimal
-  at many-GPU scale. Trade-off chosen for correctness and portability over peak
-  MoE efficiency.
+- **MoE dispatch is a batched grouped-GEMM** with fixed-capacity token routing
+  (see §3.1), not a per-expert Python loop. Every expert runs on every rank
+  (ZeRO-3 data-parallel MoE, not expert-parallel), but experts are computed with a
+  grouped `torch.bmm` over three batched weight tensors, which is what makes the
+  128-expert layer viable under ZeRO-3 CPU offload. The remaining scale step —
+  true expert-parallelism with all-to-all token routing so experts are sharded
+  across GPUs rather than replicated — is deliberately **not** implemented here and
+  is tracked as future work; it is a different tradeoff (throughput at many-GPU
+  scale) beyond the single-node bring-up this report covers.
 - **`Int8Linear` / `Int4Linear` are experimental scaffolds.** They dequantize to
   float for compute and do **not** yet deliver VRAM reduction; they exist to
   exercise the quantization interface, and are labeled as such in-code.

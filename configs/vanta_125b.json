@@ -18,7 +18,7 @@
   "kv_quant_bits": 8,
   "quantization": "bf16",
   "gradient_checkpointing": true,
-  "capacity_factor": 0.0,
+  "capacity_factor": 1.25,
   "persona_embedding_dim": 256,
   "num_persona_types": 3,
   "num_persona_experts": 4,

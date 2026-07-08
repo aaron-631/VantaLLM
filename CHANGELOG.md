@@ -8,6 +8,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Batched grouped-GEMM MoE + 125B 4-GPU bring-up path.** Reworked the sparse
+  MoE feedforward and the multi-GPU launch story so the full 125B config can be
+  validated under DeepSpeed ZeRO-3 without the parameter-fetch stall that a
+  per-expert layout causes on CPU-offloaded runs.
+  - **MoE dispatch is now a batched grouped-GEMM.** Each MoE layer stores its
+    experts as three batched weight tensors (`w_gate`/`w_up`/`w_down`) and computes
+    all experts with a grouped `torch.bmm` over a fixed-capacity dispatch buffer,
+    replacing the 128-submodule Python loop. Parameter count is identical; under
+    ZeRO-3 the per-layer gather count drops from ~384 to 3. Verified on CPU against
+    a per-expert reference (agreement ~1e-8, unbounded capacity) and for
+    gradient-checkpoint determinism — see `tests/test_batched_moe.py`.
+  - **Global MoE load balancing.** The load-balance aux loss now `all_reduce`s its
+    expert-usage histogram across data-parallel ranks, so the router balances the
+    global token distribution rather than each GPU's local shard.
+  - **Lazy, shared RoPE cache.** The shared `RotaryEmbedding` grows its cos/sin
+    cache on demand instead of materializing the full `max_seq_len` up front, so the
+    128K capability ceiling costs no memory until sequences approach it.
+  - **`configs/vanta_125b_bringup.json`** — full 125B (94 layers, 128 experts,
+    top-2 preserved) at `max_seq_len` 2048 and `capacity_factor` 1.25 for
+    memory-bounded multi-GPU validation.
+  - **`scripts/launch_vanta_4gpu.sh`** — locked, reproducible 4-GPU ZeRO-3 launcher
+    with a tmux + memory-monitor runbook.
+  - **`tests/test_batched_moe.py`** — CPU correctness suite (grad flow, per-expert
+    equivalence, checkpoint determinism, `T<E` edge, persona path, bf16 gate).
+
+### Changed
+- **`zero3.json`: offload parameters only (no `offload_optimizer`).**
+  `bitsandbytes.PagedAdamW8bit` holds 8-bit optimizer state and pages itself;
+  adding DeepSpeed optimizer offload would force an fp32 path (~1.5 TB host RAM at
+  125B → OOM) or hand bitsandbytes' CUDA step CPU tensors. `gradient_clipping: 1.0`
+  retained.
+- **`configs/vanta_125b.json`: `capacity_factor` 0.0 → 1.25** so even the
+  full-context profile has a bounded, deterministic MoE dispatch buffer.
+- **Fail-fast batch/DeepSpeed consistency check** in the training script: the run
+  aborts with a clear message before the long ZeRO-3 init if `train_batch_size` does
+  not equal `micro_batch × world_size × grad_accum`.
+
+### Added
 - **Future-scope roadmap (`docs/future_scope.md`).** Documented the two-track
   path from the current 567M framework to a published cybersecurity model:
   (1) a resource-efficient route to a small-but-real 1B–3B model on free/low-cost

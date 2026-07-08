@@ -47,6 +47,7 @@ import logging
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import torch.distributed as dist
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple, Union
 
@@ -256,18 +257,32 @@ class RotaryEmbedding(nn.Module):
                  theta: float = 500_000.0):
         super().__init__()
         self.head_dim = head_dim
+        self.max_seq_len = max_seq_len
         inv_freq = 1.0 / (
             theta ** (torch.arange(0, head_dim, 2, dtype=torch.float32) / head_dim)
         )
         self.register_buffer("inv_freq", inv_freq, persistent=False)
-        self._build_cache(max_seq_len)
+        self._cached_len = 0
+        # Lazy cache: build only an initial window and grow on demand, rather than
+        # materializing the full max_seq_len (e.g. 128k) cos/sin cache up front. This
+        # RoPE instance is SHARED across all transformer blocks, so the saving applies
+        # once for the whole model. For a capped bring-up (max_seq_len<=4096) the initial
+        # build already covers it, so no growth happens during training (checkpoint-safe).
+        self._build_cache(min(max_seq_len, 4096))
 
     def _build_cache(self, seq_len: int):
+        seq_len = min(int(seq_len), self.max_seq_len)
         t     = torch.arange(seq_len, device=self.inv_freq.device, dtype=torch.float32)
         freqs = torch.outer(t, self.inv_freq)
         emb   = torch.cat([freqs, freqs], dim=-1)
         self.register_buffer("cos_cache", emb.cos(), persistent=False)
         self.register_buffer("sin_cache", emb.sin(), persistent=False)
+        self._cached_len = seq_len
+
+    def _ensure_cache(self, needed_len: int):
+        """Grow the cache (doubling, capped at max_seq_len) only if a longer sequence appears."""
+        if needed_len > self._cached_len:
+            self._build_cache(min(self.max_seq_len, max(int(needed_len), self._cached_len * 2)))
 
     @staticmethod
     def _rotate_half(x: torch.Tensor) -> torch.Tensor:
@@ -284,9 +299,11 @@ class RotaryEmbedding(nn.Module):
         """q, k : (B, num_heads, S, head_dim)"""
         seq = q.shape[2]
         if position_ids is None:
+            self._ensure_cache(seq)
             cos = self.cos_cache[:seq].unsqueeze(0).unsqueeze(0)   # (1,1,S,D)
             sin = self.sin_cache[:seq].unsqueeze(0).unsqueeze(0)
         else:
+            self._ensure_cache(int(position_ids.max().item()) + 1)
             cos = self.cos_cache[position_ids].unsqueeze(1)        # (B,1,S,D)
             sin = self.sin_cache[position_ids].unsqueeze(1)
 
@@ -663,9 +680,17 @@ class TopKRouter(nn.Module):
             self._telemetry["counts"] = expert_counts.tolist()
         # ────────────────────────────────────────────────────────────────────────
 
-        # Load-balancing auxiliary loss
+        # Load-balancing auxiliary loss.
+        # f = fraction of tokens dispatched to each expert (hard count, no grad).
+        # Across data-parallel ranks the LOCAL f only sees this GPU's tokens; average it
+        # to the GLOBAL distribution so the router balances the whole cluster, not just the
+        # local shard. Quality only — no effect on single-GPU runs.
+        # (No-grad statistic, so the collective is autograd-free and symmetric across ranks.)
         with torch.no_grad():
             f = F.one_hot(top_k_i[:, 0], self.E).float().mean(0)   # (E,)
+            if dist.is_available() and dist.is_initialized() and dist.get_world_size() > 1:
+                dist.all_reduce(f, op=dist.ReduceOp.SUM)
+                f = f / dist.get_world_size()
         p   = probs.mean(0)                                           # (E,)
         aux = self.E * (f * p).sum()
 
@@ -678,18 +703,54 @@ class TopKRouter(nn.Module):
 
 class MoELayer(nn.Module):
     """
-    Sparse MoE FFN layer.
-    128 SwiGLU experts, top-2 per token, persona-conditioned routing.
+    Sparse MoE FFN layer.  128 SwiGLU experts, top-2 per token, persona-conditioned routing.
+
+    Batched grouped-GEMM implementation
+    ───────────────────────────────────
+    Experts are stored as THREE batched weight tensors (not 128 separate nn.Modules):
+        w_gate (E, d_model, d_ff)   w_up (E, d_model, d_ff)   w_down (E, d_ff, d_model)
+    and computed with torch.bmm over the expert dimension.
+
+    Why: under DeepSpeed ZeRO-3 CPU-offload, 128 separate expert submodules forced
+    ~128 parameter all-gathers PER MoE layer (a "parameter-fetching avalanche" that
+    makes a large multi-GPU run hang / never finish). Batched params collapse this to
+    3 large gathers per layer. Total parameter count is IDENTICAL to the old per-expert
+    layout — only the storage shape and dispatch changed.
+
+    Dispatch uses a fixed-capacity buffer (E, capacity, d_model) so per-step memory is
+    deterministic and cannot spike on router skew (Switch-Transformer style token
+    dropping; dropped tokens ride the block residual). The persona-aware TopKRouter is
+    unchanged.
     """
 
     def __init__(self, config: LLMConfig):
         super().__init__()
-        self.config = config
-        self.E     = config.num_experts
-        self.top_k = config.top_k_experts
-        self.aux_w = config.moe_aux_loss_coeff
+        self.config  = config
+        self.E       = config.num_experts
+        self.top_k   = config.top_k_experts
+        self.aux_w   = config.moe_aux_loss_coeff
+        self.d_model = config.d_model
+        self.d_ff    = config.d_ff_moe
         self.router  = TopKRouter(config)
-        self.experts = nn.ModuleList([MoEExpert(config) for _ in range(config.num_experts)])
+
+        E, Dm, Fm = self.E, self.d_model, self.d_ff
+        # Batched, bias-free expert weights. Layout is the TRANSPOSE of nn.Linear
+        # (nn.Linear stores (out,in) and does x @ W.T; for bmm we want (E, in, out)).
+        # NOTE: batched raw Parameters intentionally bypass the int8/int4 mock quant
+        # path (build_linear) — experts stay full-precision. Fine for bf16 training.
+        self.w_gate = nn.Parameter(torch.empty(E, Dm, Fm))   # x(...,Dm) @ w -> (...,Fm)
+        self.w_up   = nn.Parameter(torch.empty(E, Dm, Fm))   # x(...,Dm) @ w -> (...,Fm)
+        self.w_down = nn.Parameter(torch.empty(E, Fm, Dm))   # h(...,Fm) @ w -> (...,Dm)
+        self._reset_expert_params()
+
+    def _reset_expert_params(self):
+        # Replicate nn.Linear default init: kaiming_uniform_(a=sqrt(5)) == U(±1/sqrt(fan_in)),
+        # fan_in = in_features. gate/up fan_in = d_model; down fan_in = d_ff_moe.
+        bound_in = 1.0 / math.sqrt(self.d_model)   # gate & up
+        bound_ff = 1.0 / math.sqrt(self.d_ff)      # down
+        nn.init.uniform_(self.w_gate, -bound_in, bound_in)
+        nn.init.uniform_(self.w_up,   -bound_in, bound_in)
+        nn.init.uniform_(self.w_down, -bound_ff, bound_ff)
 
     def forward(
         self,
@@ -698,47 +759,51 @@ class MoELayer(nn.Module):
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         B, S, D = x.shape
         T       = B * S
-        tokens  = x.view(T, D)
+        tokens  = x.view(T, D)                                        # (T, D)
 
         # Expand persona_ctx: (B, composite_dim) → (T, composite_dim)
         persona_flat = None
         if persona_ctx is not None:
             persona_flat = persona_ctx.unsqueeze(1).expand(B, S, -1).reshape(T, -1)
 
+        # Persona-aware routing (UNCHANGED). weights:(T,K) indices:(T,K) aux:fp32 scalar
         weights, indices, aux = self.router(tokens, persona_flat)
-        # weights: (T, top_k),  indices: (T, top_k)
+        E, K, Fm = self.E, self.top_k, self.d_ff
 
-        out = torch.zeros_like(tokens)
+        # ── Capacity: deterministic buffer size, hard-caps per-expert VRAM ──
+        cf = getattr(self.config, "capacity_factor", 0.0)
+        if cf is None or cf <= 0:
+            cf = 1.25                                                # safe default when unset/0
+        capacity = max(1, math.ceil(K * T / E * cf))
 
-        # Optional bounded expert capacity to prevent GPU OOM at scale
-        capacity = -1
-        if getattr(self.config, "capacity_factor", 0.0) > 0:
-            capacity = int((T / self.E) * self.config.capacity_factor)
+        # ── Flatten (token, slot) assignments ──
+        flat_e = indices.reshape(-1)                                 # (T*K,) expert id, int64
+        flat_w = weights.reshape(-1)                                 # (T*K,) routing prob, x.dtype
+        tok_id = torch.arange(T, device=x.device).unsqueeze(1).expand(T, K).reshape(-1)  # (T*K,)
 
-        # Optimized dispatch: Single loop over experts (O(E) instead of O(K*E))
-        for e in range(self.E):
-            # Find all (token_index, k_slot) pairs assigned to expert e
-            t_indices, k_slots = (indices == e).nonzero(as_tuple=True)
+        # Position within each expert (segmented prefix count) → unique (e,pos) per kept slot
+        onehot = F.one_hot(flat_e, E)                                # (T*K, E) int64
+        pos = onehot.cumsum(0).gather(1, flat_e.unsqueeze(1)).squeeze(1) - 1  # (T*K,) 0-indexed
+        keep = pos < capacity                                        # drop overflow (rides residual)
 
-            # Extract corresponding tokens and weights
-            # Note: A token might appear multiple times if it was assigned to the same
-            # expert in multiple slots (though top-k usually prevents this).
-            expert_tokens = tokens[t_indices]
-            expert_weights = weights[t_indices, k_slots, None]
+        e_k = flat_e[keep]                                           # (N,)
+        p_k = pos[keep]                                              # (N,) in [0, capacity)
+        t_k = tok_id[keep]                                           # (N,)
+        w_k = flat_w[keep]                                           # (N,) x.dtype
 
-            num_tokens = t_indices.numel()
-            if capacity > 0 and num_tokens > capacity:
-                # Deterministic overflow routing: retain only the top 'capacity' tokens by routing weight
-                _, top_idx = torch.topk(expert_weights.squeeze(-1), capacity)
-                t_indices = t_indices[top_idx]
-                expert_tokens = expert_tokens[top_idx]
-                expert_weights = expert_weights[top_idx]
+        # ── Dispatch tokens into (E, capacity, D); each (e,p) is unique → no collision ──
+        x_disp = tokens.new_zeros(E, capacity, D)                    # (E, cap, D)
+        x_disp[e_k, p_k] = tokens[t_k]
 
-            # Process tokens through the expert and accumulate back into 'out'.
-            # index_add_ safely handles a token routed to the same expert in
-            # multiple top-k slots (duplicate indices accumulate rather than overwrite).
-            expert_out = expert_weights * self.experts[e](expert_tokens)
-            out.index_add_(0, t_indices, expert_out)
+        # ── Batched expert compute (grouped GEMM over the E dim, no Python loop) ──
+        h = torch.bmm(x_disp, self.w_gate)                          # (E, cap, Fm)
+        g = torch.bmm(x_disp, self.w_up)                            # (E, cap, Fm)
+        a = F.silu(h) * g                                           # (E, cap, Fm)
+        y = torch.bmm(a, self.w_down)                              # (E, cap, D)
+
+        # ── Weighted combine back to (T, D) ──
+        contrib = y[e_k, p_k] * w_k.unsqueeze(1)                    # (N, D)
+        out = torch.zeros_like(tokens).index_add(0, t_k, contrib)   # out-of-place (checkpoint-safe)
 
         return out.view(B, S, D), aux * self.aux_w
 

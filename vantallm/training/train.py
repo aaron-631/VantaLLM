@@ -217,6 +217,45 @@ def sanity_check_loop():
         elif _arg == "--deepspeed_config" and _i + 1 < len(sys.argv):
             _ds_config_path = sys.argv[_i + 1]
 
+    # ── Fail-fast: batch-size / DeepSpeed consistency ──────────────────────────
+    # DeepSpeed requires the batch fields to satisfy:
+    #   train_batch_size == micro_batch_per_gpu * world_size * grad_accum
+    # A mismatch between the BATCH_SIZE env var (the dataloader's per-GPU micro-batch)
+    # and the DeepSpeed config silently corrupts the effective-batch / accumulation math
+    # and can drive OOM or wrong gradients. Catch it BEFORE the 30-90 min zero.Init.
+    if "--deepspeed" in sys.argv and _ds_config_path and os.path.exists(_ds_config_path):
+        try:
+            with open(_ds_config_path) as _f:
+                _ds_cfg = json.load(_f)
+        except Exception as _e:
+            log_error(f"Could not parse DeepSpeed config '{_ds_config_path}': {_e}")
+            raise
+        _micro = _ds_cfg.get("train_micro_batch_size_per_gpu")
+        _ga    = int(_ds_cfg.get("gradient_accumulation_steps", 1))
+        _tbs   = _ds_cfg.get("train_batch_size", None)
+        _env_bs = int(os.environ.get("BATCH_SIZE", 2))
+        # If the config pins a micro-batch, the BATCH_SIZE env must agree with it.
+        if _micro is not None and int(_micro) != _env_bs:
+            msg = (
+                f"Batch-size misconfiguration: DeepSpeed train_micro_batch_size_per_gpu={_micro} "
+                f"but BATCH_SIZE env={_env_bs}. Make them agree (the dataloader uses BATCH_SIZE)."
+            )
+            log_error(msg)
+            raise RuntimeError(msg)
+        _micro_eff = int(_micro) if _micro is not None else _env_bs
+        _expected = _micro_eff * world_size * _ga
+        if _tbs is not None and int(_tbs) != _expected:
+            msg = (
+                f"Batch-size misconfiguration: DeepSpeed train_batch_size={_tbs} but "
+                f"micro({_micro_eff}) * world_size({world_size}) * grad_accum({_ga}) = {_expected}."
+            )
+            log_error(msg)
+            raise RuntimeError(msg)
+        log_info(
+            f"Batch consistency OK: micro={_micro_eff} * world={world_size} * grad_accum={_ga} "
+            f"= {_expected}" + (f" == train_batch_size={_tbs}" if _tbs is not None else "")
+        )
+
     if "--deepspeed" in sys.argv and _ds_config_path:
         import deepspeed as _ds_init
         log_info("DeepSpeed ZeRO-3 detected: using zero.Init() for sharded model construction.")

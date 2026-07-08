@@ -8,9 +8,22 @@ The following outlines the immediate and long-term architectural priorities for 
 - **DeepSpeed ZeRO-3 Validations:** Run physical experiments using the analytical 125B configurations on multi-node topologies.
 
 ## Long-Term Vision (Q4 2026 and Beyond)
-- **MoE Routing Refinement:** Enhance sparse expert routing with stronger load-balancing behavior and better utilization visibility.
+- **Expert-Parallel MoE (all-to-all):** The MoE layer is now a batched grouped-GEMM
+  with global load balancing (see the technical report §3.1), which makes the
+  128-expert layer viable under ZeRO-3 data-parallelism. The next scale step is true
+  expert-parallelism — sharding experts across GPUs and routing tokens between them
+  with all-to-all — for throughput at many-GPU scale.
 - **Extended Context:** Implement sliding window attention or ring-attention mechanisms for >128k context lengths.
 - **Open-Source Checkpoints:** Release fully converged foundational model weights based on the 567M architecture.
+
+### Recently Completed
+- **Batched grouped-GEMM MoE dispatch** replacing the per-expert Python loop, with a
+  fixed-capacity buffer and CPU-verified equivalence/checkpoint tests.
+- **Global (cross-rank) MoE load-balancing loss.**
+- **Lazy shared RoPE cache** removing the full-`max_seq_len` per-layer allocation.
+- **125B 4-GPU ZeRO-3 bring-up path**: `configs/vanta_125b_bringup.json`,
+  `scripts/launch_vanta_4gpu.sh`, params-only offload, gradient clipping, and a
+  fail-fast batch-consistency check.
 
 ## Task Backlog
 

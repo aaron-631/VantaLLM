@@ -117,6 +117,48 @@ following requirements:
 - **Swap / Virtual Memory:** A 100B-scale model plus an 8-bit partitioned optimizer needs on the order of a terabyte-plus of virtual memory. On a single node whose host RAM is smaller than that, a large NVMe swapfile (budget several hundred GB and size it against your own node's RAM) is required to avoid OOM kills during paging. Size it from the target node's actual memory rather than assuming a fixed figure.
 - **Optimizer Selection:** At this scale use `bitsandbytes.optim.PagedAdamW8bit` to keep the optimizer state within memory constraints.
 
+### 125B Bring-Up on 4 GPUs
+
+A dedicated profile and launcher exist for validating the full 125B config on a
+single 4-GPU node (e.g. 4× RTX PRO 6000 Blackwell, 95 GB each, with high host RAM).
+The goal of a bring-up run is narrow: complete a small fixed number of steps
+(e.g. 32) with the MoE active and no OOM — a "prove it runs" bar, not a converged
+training run. The full 125B is preserved (94 layers, `d_model` 4096, 128 experts,
+top-2); only context length and optimizer memory format are tuned.
+
+```bash
+tmux new -s train
+
+# Stage B — cheap pipeline proof on the small config first (minutes):
+MODEL_CONFIG=configs/vanta_567m.json ./scripts/launch_vanta_4gpu.sh 2>&1 | tee smoke.log
+
+# Stage C — the 125B bring-up:
+./scripts/launch_vanta_4gpu.sh 2>&1 | tee train.log
+```
+
+In a second `tmux` pane, watch memory:
+
+```bash
+watch -n5 'free -h; echo; nvidia-smi --query-gpu=index,memory.used,memory.total --format=csv'
+```
+
+**Memory math (why the optimizer choice is not optional).** At 125B parameters, a
+standard fp32 Adam (which `torch.optim.AdamW` becomes as `DeepSpeedCPUAdam` under
+optimizer offload) needs an fp32 master copy plus fp32 momentum and variance —
+roughly 1.5 TB of host memory — which will OOM-kill a node with a few hundred GB of
+RAM. `bitsandbytes.PagedAdamW8bit` holds its optimizer state in 8-bit (~250 GB) and
+does its **own** CPU paging, so `zero3.json` offloads **parameters only** and does
+**not** set `offload_optimizer` (which would either force the fp32 path or hand
+bitsandbytes' CUDA optimizer step CPU tensors). This is why the shipped `zero3.json`
+has `offload_param` but no `offload_optimizer`.
+
+**Guardrails baked into the run.** `zero3.json` sets `gradient_clipping: 1.0`
+(DeepSpeed clips on its own path; without it a random-init run can spike to NaN).
+The training script fails fast before the long ZeRO-3 init if the batch fields are
+inconsistent (`train_batch_size` must equal `micro_batch × world_size × grad_accum`).
+`capacity_factor` is `1.25`, so the MoE dispatch buffer is fixed-size and cannot
+spike on router skew.
+
 ## A100 20GB Configuration Notes
 The 567M model reference configuration (`vanta_567m.json`) is designed to easily fit within a 20GB VRAM footprint using the default micro-batch size and gradient accumulation settings. 
 

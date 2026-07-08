@@ -12,11 +12,12 @@ The model architecture, training pipeline, and configurations were designed and 
 
 A from-scratch PyTorch framework for training decoder-only language models, built and trained end-to-end rather than assembled from high-level libraries.
 
-- **Modern architecture, implemented from scratch:** RoPE, GQA, RMSNorm, SwiGLU, and alternating dense/MoE feedforward blocks with top-k expert routing.
+- **Modern architecture, implemented from scratch:** RoPE, GQA, RMSNorm, SwiGLU, and alternating dense/MoE feedforward blocks with top-k expert routing over a batched grouped-GEMM expert layer.
 - **Real distributed training:** PyTorch DDP and DeepSpeed ZeRO, rank-safe checkpoint and resume, free-port autodetection, and validation-first cluster bring-up.
 - **Complete data pipeline:** offline normalization, deduplication, tokenization, and binary sharding, with manifest-backed reproducibility.
 - **Tested and CI-backed:** architecture demo, distributed validator, GPU-readiness checks, and a pytest suite.
-- **Concrete result:** completed a 30,000-step training run of the 567M-parameter config on a single 20GB A100. The same codepaths scale to the 125B and 235B configs analytically through JSON configuration alone.
+- **Concrete result:** completed a 30,000-step training run of the 567M-parameter config on a single 20GB A100. The same codepaths scale to the 125B and 235B configs through JSON configuration alone, with a dedicated `vanta_125b_bringup.json` profile and a locked 4-GPU launcher for multi-GPU ZeRO-3 validation.
+- **Hardware-portable by design:** one codebase, no branches. A 20GB A100 runs the 567M reference under plain DDP with **no ZeRO partitioning**; a 4× RTX PRO 6000 Blackwell node runs the full 125B under ZeRO-3 CPU-offload; an H200 (or any box without `bitsandbytes`) is handled by the optimizer's automatic `PagedAdamW8bit → AdamW` fallback. You change a config and a launcher flag, not the model code.
 
 Quick start:
 
@@ -80,12 +81,12 @@ The documentation set is intentionally small. Each file is supposed to answer a 
 
 VantaLLM implements a modern causal decoder-only stack featuring:
 
-- **Rotary Position Embeddings (RoPE)** for long-context positional encoding.
+- **Rotary Position Embeddings (RoPE)** for long-context positional encoding, with a single shared, lazily-grown cache across all layers.
 - **Grouped-Query Attention (GQA)** with quantized KV-cache support.
 - **RMSNorm + SwiGLU** in a pre-norm transformer formulation.
-- **Alternating dense and MoE blocks** with top-k expert routing.
+- **Alternating dense and MoE blocks** with top-k expert routing, implemented as a **batched grouped-GEMM** over experts (not a per-expert Python loop) with fixed-capacity dispatch and global load-balancing — designed to scale under DeepSpeed ZeRO-3 without a parameter-fetch stall.
 - **Persona-conditioning hooks** for both training-time and inference-time control paths.
-- **JSON-driven scaling** from tiny debug models to large analytical reference configs.
+- **JSON-driven scaling** from tiny debug models to large analytical reference configs, including a 125B bring-up profile for multi-GPU validation.
 
 ## Current Reference Contract
 
@@ -360,8 +361,16 @@ VantaLLM/
 
 ## Roadmap
 
+Recently completed:
+
+- [x] Batched grouped-GEMM MoE (replaces the per-expert Python loop; scales under ZeRO-3 without a parameter-fetch stall).
+- [x] MoE routing load-balancing loss, averaged globally across data-parallel ranks.
+- [x] 125B multi-GPU bring-up profile (`configs/vanta_125b_bringup.json`) with a locked 4-GPU ZeRO-3 launcher.
+
+In progress / planned:
+
+- [ ] Expert-parallel MoE (all-to-all dispatch) for multi-node expert sharding.
 - [ ] Implement FlashAttention-2 natively into the Transformer core.
-- [ ] Enhance MoE routing with load-balancing loss.
 - [ ] Expand the analytical multi-node DeepSpeed ZeRO-3 configurations.
 - [ ] Release pre-trained base model weights.
 
