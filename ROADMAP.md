@@ -29,6 +29,11 @@ The following outlines the immediate and long-term architectural priorities for 
   CPU-optimizer-offload config, and automatic use of `DeepSpeedCPUAdam` when the
   config owns the optimizer. Full cluster runbook + bring-up pitfalls in
   [`docs/multinode_deepspeed_guide.md`](docs/multinode_deepspeed_guide.md).
+- **Self-configuring multi-node launcher**: `launch_deepspeed.sh` now derives
+  `MASTER_ADDR` and `NCCL_SOCKET_IFNAME` from the live routing table (no hardcoded
+  IPs or NIC names — portable across any cluster) and runs a topology sanity
+  preflight that fails fast, instead of hanging at 0% GPU, when nodes lack a
+  directly-routable private link (1:1 NAT / duplicate-IP detection).
 - **MoE eval-mode capacity fix**: capacity token-dropping is gated on `self.training`
   so incremental KV-cache decode keeps every token and stays exact (KV-cache ==
   no-cache invariant restored).

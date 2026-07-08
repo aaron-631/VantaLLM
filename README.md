@@ -368,6 +368,7 @@ Recently completed:
 - [x] 125B multi-GPU bring-up profile (`configs/vanta_125b_bringup.json`) with a locked 4-GPU ZeRO-3 launcher.
 - [x] Multi-node ZeRO-3 wiring: DeepSpeed-native distributed init, hostfile launcher, 8-GPU CPU-optimizer-offload config, and automatic `DeepSpeedCPUAdam` selection — one codebase from single GPU to multi-node cluster ([`docs/multinode_deepspeed_guide.md`](docs/multinode_deepspeed_guide.md)).
 - [x] MoE eval-mode capacity fix (gated on `self.training`) restoring exact KV-cache incremental decode.
+- [x] Self-configuring multi-node launcher: auto-detects `MASTER_ADDR`/`NCCL_SOCKET_IFNAME` from the routing table (no hardcoded IPs) and fails fast on an unroutable topology (1:1 NAT / duplicate-IP) instead of hanging at 0% GPU.
 
 In progress / planned:
 

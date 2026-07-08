@@ -59,7 +59,7 @@ reference and the 125B analytical profile. This guide is the topology layer of t
 | File | Role |
 |---|---|
 | `vantallm/distributed/init_distributed.py` | Initializes distributed **through DeepSpeed** so ZeRO sees the real world size (§4, Pitfall 6). |
-| `vantallm/distributed/launch_deepspeed.sh` | Single-node **and** hostfile-based multi-node launch. |
+| `vantallm/distributed/launch_deepspeed.sh` | Single-node **and** hostfile-based multi-node launch; auto-detects `MASTER_ADDR`/`NCCL_SOCKET_IFNAME` from the routing table and preflights the cluster topology (§4, Pitfall 11). |
 | `vantallm/distributed/hostfile` | Node list + `slots=` (GPUs/node). Determines process count. |
 | `vantallm/distributed/deepspeed_configs/zero3_offload_multinode.json` | 8-GPU ZeRO-3 config with CPU optimizer offload. |
 | `vantallm/training/train.py` | Fail-fast batch check + config-owned-optimizer detection (§4, Pitfall 9). |
@@ -90,6 +90,16 @@ bash vantallm/distributed/launch_deepspeed.sh 4 \
 `train_batch_size` in the config must equal `micro_batch × grad_accum × (total GPUs across
 the hostfile)`. The shipped multi-node config uses `1 × 16 × 8 = 128`.
 
+**Network auto-configuration (no hardcoded IPs).** In multi-node mode the launcher no
+longer assumes any fixed address or NIC name. It reads the hostfile, finds a peer, and
+derives both `MASTER_ADDR` (the master's cluster IP) and `NCCL_SOCKET_IFNAME` (the NIC that
+actually routes to that peer) straight from the live routing table — `ip route get <peer>`.
+So the same script works on any cluster/addressing with only the hostfile edited. Every
+value is still overridable from the environment. Before the expensive ZeRO-3 init it runs a
+**topology sanity preflight** and aborts in seconds — rather than hanging at 0% GPU — if the
+nodes have no directly-routable private link (see Pitfall 11). Bypass with
+`VANTA_SKIP_NET_PRECHECK=1` only if you are certain your topology is fine.
+
 ---
 
 ## 4. Pitfalls observed and fixed
@@ -110,6 +120,7 @@ in this repo.
 | 8 | Config edits didn't take effect on the worker | No shared filesystem — the edit reached only the master | Sync every changed file to **every** node (§7) |
 | **9** | `ZeRORuntimeException: You are using ZeRO-Offload with a client provided optimizer` | ZeRO-Offload requires its own `DeepSpeedCPUAdam` and rejects a client optimizer | **Fixed:** the offload config defines an `"optimizer"` block, and `train.py` now detects it and passes `optimizer=None` so DeepSpeed builds `DeepSpeedCPUAdam` |
 | **10** | `NCCL error: invalid usage ... receiving N bytes instead of M`, collective timeout on the first forward | **Historical model bug:** an MoE forward that skipped an expert (`continue`) on ranks with zero routed tokens desynced the ZeRO-3 param-gather collective order across ranks | **Already fixed** by the batched grouped-GEMM MoE: every rank runs all experts via `torch.bmm` over a fixed-capacity buffer, so the collective sequence is identical on every rank by construction |
+| **11** | Rendezvous succeeds and all ranks reach `Init START`, then workers loop `connect to <ip>:<port> returned Connection refused` and the run hangs at 0% GPU | **No directly-routable private link between nodes.** NCCL exchanges each rank's own NIC address *in-band*; it cannot cross 1:1 NAT or reach a duplicated IP. Two seen shapes: (a) each VM's public IP is 1:1 NAT at the cloud edge and *not* on the NIC — the box only knows a private address it then advertises to peers; (b) every node was given the *same* private IP, so a worker dialing "the master" dials itself. Both make the peer connect to an address that points back at itself → refused. | **Infra, not code:** attach all nodes to a shared private VLAN/VPC with **distinct, on-link IPs** and **no NAT** between them; put those in the hostfile. The launcher's preflight now detects all three variants (behind-NAT, no-private-link, duplicate-IP) and aborts in seconds with the exact remediation instead of hanging. Diagnostic tell: `SSH_CONNECTION`'s server-IP field showing a *private* address while you SSH'd in on a public one confirms the public IP is NAT'd and not on the NIC. |
 
 ### 4.1 The MoE eval-mode invariant (a related correctness fix)
 
@@ -216,7 +227,7 @@ not just the master's.
 1. `ssh <master> hostname` and `ssh <worker> hostname` from the master — instant, no prompt.
 2. `pdsh -w <master>,<worker> hostname` from the master — both hostnames, no rcmd/connection errors.
 3. Host firewall inactive on both nodes (or `10.0.0.0/24` trusted).
-4. `ip -4 -o addr show | grep 10.0.0` on both nodes — the interface matches `NCCL_SOCKET_IFNAME`.
+4. `ip -4 -o addr show` on both nodes — each node's cluster IP is **present, distinct, and on the same subnet**; then `ip route get <peer-ip>` shows a **direct** route (`dev <nic> src <this-node-ip>`, no `via <gateway>`). If the src is private while the peer is public, or the route goes via a gateway, you are behind NAT / have no shared subnet — the launcher will refuse to start (Pitfall 11).
 5. `python3 -c "import torch, deepspeed; print(torch.__version__, deepspeed.__version__)"` — identical on every node.
 6. Diff `MODEL_CONFIG`, `BATCH_SIZE`, `TRAIN_STEPS` between nodes' shell profiles — DeepSpeed does not forward these.
 7. Check `train_batch_size == micro × grad_accum × (total GPUs across the hostfile)`.

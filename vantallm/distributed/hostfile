@@ -1,2 +1,12 @@
+# DeepSpeed hostfile: one line per node -> "<ip> slots=<gpus-to-use>".
+#
+# The IPs MUST be DISTINCT, on-link addresses on a shared private network (VLAN/VPC)
+# that route directly between nodes with NO 1:1 NAT in between. NCCL exchanges each
+# rank's own NIC address in-band, so a NAT'd public IP or a duplicated private IP
+# (the same address on every node) makes peers dial themselves -> "connection
+# refused". launch_deepspeed.sh preflights this and auto-detects the NIC + master
+# address from these entries, so you only edit the IPs and slots here.
+#
+# Replace the examples below with your cluster's real private IPs.
 10.0.0.2 slots=4
 10.0.0.3 slots=4
