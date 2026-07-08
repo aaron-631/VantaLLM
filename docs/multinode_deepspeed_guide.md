@@ -124,8 +124,8 @@ The fix gates capacity dropping on `self.training`:
 - **Eval / inference** → capacity sized to the actual max per-expert load, every token
   kept → KV-cache decode is exact again.
 
-Both VantaLLM and its sibling stack carry this fix; it is verified by the KV-cache decode
-parity test in the system suite.
+This fix is verified by the KV-cache incremental-decode parity test in the system suite
+(test 2.4, "KV-cache tokens match no-cache tokens").
 
 ---
 
