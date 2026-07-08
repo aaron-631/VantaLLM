@@ -161,18 +161,34 @@ mitigations are baked into the shipped config and model:
   GPU activation memory, which matters more here than usual because the CPU side has no
   offload margin left.
 
-**Single-node vs multi-node optimizer choice — they differ, and both are correct:**
+**Provisioning: full 125B needs the fp32 optimizer OFF the GPUs — and enough RAM to hold it.**
+This is the single most common way a bring-up dies. ZeRO-3 always builds an **fp32 master
+weight partition** (500 GB at 125B) plus Adam moments. With *params-only* offload
+(`offload_param` but no `offload_optimizer`) that master lands on `self.device = cuda`, i.e.
+**on the GPUs** — 500 GB / 4 ≈ **125 GB/GPU**, which does not fit a 95 GB card. Testing on a
+single 4×95 GB node confirmed this: the run reaches `_create_fp32_partitions` and dies with
+`CUDA out of memory` while the card sits at ~94 GB. **A single 4-GPU node cannot run full
+125B by GPU+host memory alone** (380 GB GPU + ~692 GB host ≈ 1.07 TB < the ~1.25 TB an 8-bit
+optimizer needs, and the 500 GB fp32 master cannot sit on 380 GB of GPU). The fix is to
+offload the optimizer off-GPU and size host RAM for it:
 
-- **Single node (e.g. one 4×96 GB box):** the fp32 optimizer state can't be sharded across
-  nodes, so an fp32 `DeepSpeedCPUAdam` would need ~1.5 TB on one host and OOM. Here
-  `bitsandbytes.PagedAdamW8bit` (8-bit state, ~250 GB, self-paging) is used and the config
-  offloads **params only** (no `offload_optimizer`). This is the `zero3.json` path.
-- **Multi node (2× box):** ZeRO-3 shards the fp32 optimizer state across all 8 ranks, so it
-  fits per-node host RAM. Here the config offloads the **optimizer** and lets DeepSpeed
-  build `DeepSpeedCPUAdam` (Pitfall 9). This is the `zero3_offload_multinode.json` path.
+| Topology | Min host RAM | How |
+|---|---|---|
+| 1 node × 4 GPU | — | **Won't fit** full 125B on memory alone. Only path is **NVMe offload** (ZeRO-Infinity: `offload_optimizer`/`offload_param` → `nvme`); disk-bound and slow, for a "prove it runs" bring-up only. |
+| **1 node × 8 GPU** | **~1.6 TB** (one host holds the full ~1.5 TB fp32 state) | Cleanest full-125B path (DGX-class RAM). Optimizer offloaded to CPU. Launch with **no hostfile**: `launch_deepspeed.sh 8 vantallm/distributed/deepspeed_configs/zero3_offload_multinode.json`. |
+| **2 nodes × 4 GPU** | **~768 GB–1 TB per node** (or 692 GB + ≥150 GB NVMe swap) | 1.5 TB sharded across 8 ranks ≈ **~750 GB/node** — right at the 692 GB line, so add RAM or swap. Needs a same-region private VLAN (see §2). Same config, **with** the hostfile. |
 
-The trainer picks the right optimizer automatically: if the DeepSpeed config defines an
-`"optimizer"` block, it skips the local bnb optimizer; otherwise it builds `PagedAdamW8bit`.
+The `zero3_offload_multinode.json` config (`train_batch_size 128 = 1 × 16 × 8`) serves both
+8-GPU cases — single box (no hostfile) and 2×4 (with hostfile) — because it defines its own
+`AdamW`/`DeepSpeedCPUAdam` optimizer block and offloads it to CPU.
+
+**Why not 8-bit bitsandbytes here?** `bitsandbytes.PagedAdamW8bit` (8-bit state, ~250 GB) is
+attractive, but ZeRO-Offload requires its own `DeepSpeedCPUAdam` and rejects a client
+optimizer (Pitfall 9) — and even with 8-bit states the 500 GB fp32 master still cannot sit
+on the GPUs. So at full 125B the optimizer must be offloaded and fp32; the lever that makes
+it fit is **host RAM (or NVMe)**, not optimizer bit-width. The trainer picks automatically:
+if the config defines an `"optimizer"` block it offloads to `DeepSpeedCPUAdam`; otherwise it
+builds `PagedAdamW8bit` (the small-config / single-GPU path).
 
 **Watch host RAM live on both nodes during the first run** — given zero margin, catching an
 OOM-kill on a short run beats discovering it hours into a real one:

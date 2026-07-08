@@ -122,23 +122,41 @@ following requirements:
 - **Swap / Virtual Memory:** A 100B-scale model plus an 8-bit partitioned optimizer needs on the order of a terabyte-plus of virtual memory. On a single node whose host RAM is smaller than that, a large NVMe swapfile (budget several hundred GB and size it against your own node's RAM) is required to avoid OOM kills during paging. Size it from the target node's actual memory rather than assuming a fixed figure.
 - **Optimizer Selection:** At this scale use `bitsandbytes.optim.PagedAdamW8bit` to keep the optimizer state within memory constraints.
 
-### 125B Bring-Up on 4 GPUs
+### 125B Bring-Up: what actually fits where
 
-A dedicated profile and launcher exist for validating the full 125B config on a
-single 4-GPU node (e.g. 4× RTX PRO 6000 Blackwell, 95 GB each, with high host RAM).
-The goal of a bring-up run is narrow: complete a small fixed number of steps
-(e.g. 32) with the MoE active and no OOM — a "prove it runs" bar, not a converged
-training run. The full 125B is preserved (94 layers, `d_model` 4096, 128 experts,
-top-2); only context length and optimizer memory format are tuned.
+The goal of a bring-up run is narrow: complete a small fixed number of steps (e.g. 32)
+with the MoE active and no OOM — a "prove it runs" bar, not a converged run. The full
+125B is preserved (94 layers, `d_model` 4096, 128 experts, top-2); only context length
+and the memory strategy change with the hardware.
+
+**Tested finding — full 125B does NOT fit on a single 4-GPU node by memory alone.** ZeRO-3
+always builds an **fp32 master weight partition** (500 GB at 125B) plus Adam moments. With
+*params-only* offload (`offload_param`, no `offload_optimizer`) that master is placed on the
+GPUs — 500 GB / 4 ≈ **125 GB/GPU**, which does not fit a 95 GB card. On testing, such a run
+reaches DeepSpeed's `_create_fp32_partitions` and dies with `CUDA out of memory` while each
+card sits at ~94 GB. A single 4×95 GB node has 380 GB GPU + ~692 GB host ≈ 1.07 TB total,
+below the ~1.25 TB an 8-bit optimizer needs — and the 500 GB fp32 master cannot live on the
+380 GB of GPU regardless. The `launch_vanta_4gpu.sh` + `vanta_125b_bringup.json` profile is
+therefore a **pipeline/MoE proof path** (run it on the small `vanta_567m.json` config, or a
+reduced-expert profile that fits), not a way to fit the literal 125B on four cards.
+
+To run the **literal full 125B**, the optimizer must be offloaded off-GPU and host RAM (or
+NVMe) sized for the ~1.5 TB fp32 state. See
+[multinode_deepspeed_guide.md](multinode_deepspeed_guide.md) §5 for the provisioning table;
+in short:
+
+| Hardware | Full-125B path |
+|---|---|
+| 1 node × 4 GPU | NVMe offload only (ZeRO-Infinity) — slow, "prove it runs" only |
+| 1 node × 8 GPU, ~1.6 TB RAM | optimizer offload to CPU; `launch_deepspeed.sh 8 <offload cfg>` (no hostfile) |
+| 2 nodes × 4 GPU, ~768 GB+/node + same-region VLAN | optimizer offload to CPU, sharded across ranks; same cfg with the hostfile |
+
+**Pipeline/MoE proof on 4 GPUs (fits today):**
 
 ```bash
 tmux new -s train
-
-# Stage B — cheap pipeline proof on the small config first (minutes):
+# Stage B — cheap pipeline proof on the small config (minutes):
 MODEL_CONFIG=configs/vanta_567m.json ./scripts/launch_vanta_4gpu.sh 2>&1 | tee smoke.log
-
-# Stage C — the 125B bring-up:
-./scripts/launch_vanta_4gpu.sh 2>&1 | tee train.log
 ```
 
 In a second `tmux` pane, watch memory:
@@ -146,16 +164,6 @@ In a second `tmux` pane, watch memory:
 ```bash
 watch -n5 'free -h; echo; nvidia-smi --query-gpu=index,memory.used,memory.total --format=csv'
 ```
-
-**Memory math (why the optimizer choice is not optional).** At 125B parameters, a
-standard fp32 Adam (which `torch.optim.AdamW` becomes as `DeepSpeedCPUAdam` under
-optimizer offload) needs an fp32 master copy plus fp32 momentum and variance —
-roughly 1.5 TB of host memory — which will OOM-kill a node with a few hundred GB of
-RAM. `bitsandbytes.PagedAdamW8bit` holds its optimizer state in 8-bit (~250 GB) and
-does its **own** CPU paging, so `zero3.json` offloads **parameters only** and does
-**not** set `offload_optimizer` (which would either force the fp32 path or hand
-bitsandbytes' CUDA optimizer step CPU tensors). This is why the shipped `zero3.json`
-has `offload_param` but no `offload_optimizer`.
 
 **Guardrails baked into the run.** `zero3.json` sets `gradient_clipping: 1.0`
 (DeepSpeed clips on its own path; without it a random-init run can spike to NaN).
