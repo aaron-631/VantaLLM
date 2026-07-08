@@ -770,12 +770,6 @@ class MoELayer(nn.Module):
         weights, indices, aux = self.router(tokens, persona_flat)
         E, K, Fm = self.E, self.top_k, self.d_ff
 
-        # ── Capacity: deterministic buffer size, hard-caps per-expert VRAM ──
-        cf = getattr(self.config, "capacity_factor", 0.0)
-        if cf is None or cf <= 0:
-            cf = 1.25                                                # safe default when unset/0
-        capacity = max(1, math.ceil(K * T / E * cf))
-
         # ── Flatten (token, slot) assignments ──
         flat_e = indices.reshape(-1)                                 # (T*K,) expert id, int64
         flat_w = weights.reshape(-1)                                 # (T*K,) routing prob, x.dtype
@@ -784,7 +778,24 @@ class MoELayer(nn.Module):
         # Position within each expert (segmented prefix count) → unique (e,pos) per kept slot
         onehot = F.one_hot(flat_e, E)                                # (T*K, E) int64
         pos = onehot.cumsum(0).gather(1, flat_e.unsqueeze(1)).squeeze(1) - 1  # (T*K,) 0-indexed
-        keep = pos < capacity                                        # drop overflow (rides residual)
+
+        # ── Capacity: deterministic buffer size, hard-caps per-expert VRAM ──
+        # Fixed-capacity token dropping is a TRAINING-time VRAM guarantee (per-step
+        # expert buffers can't spike on router skew; dropped tokens ride the residual).
+        # At inference/eval it MUST be disabled: capacity is derived from T = B*S, so a
+        # full forward (T = whole sequence) drops overflow tokens while incremental
+        # KV-cache decode (T = 1 per step) never does — the two diverge, breaking the
+        # KV-cache==no-cache invariant. When not training, size the buffer to the actual
+        # max per-expert load so every token is kept and decode stays exact.
+        if self.training:
+            cf = getattr(self.config, "capacity_factor", 0.0)
+            if cf is None or cf <= 0:
+                cf = 1.25                                            # safe default when unset/0
+            capacity = max(1, math.ceil(K * T / E * cf))
+            keep = pos < capacity                                    # drop overflow (rides residual)
+        else:
+            capacity = int(pos.max().item()) + 1 if pos.numel() else 1
+            keep = torch.ones_like(pos, dtype=torch.bool)           # eval: keep every token
 
         e_k = flat_e[keep]                                           # (N,)
         p_k = pos[keep]                                              # (N,) in [0, capacity)
